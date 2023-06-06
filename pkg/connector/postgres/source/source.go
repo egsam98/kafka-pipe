@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Shopify/sarama"
@@ -23,14 +24,14 @@ import (
 const Plugin = "pgoutput"
 
 type Source struct {
-	cfg             Config
-	storage         warden.Storage
-	prod            sarama.SyncProducer
-	conn            *pgconn.PgConn
-	relations       map[uint32]*pglogrepl.RelationMessage
-	typeMap         *pgtype.Map
-	standByDeadline time.Time
-	xLogPos         pglogrepl.LSN
+	cfg       Config
+	wg        sync.WaitGroup
+	storage   warden.Storage
+	prod      sarama.SyncProducer
+	conn      *pgconn.PgConn
+	relations map[uint32]*pglogrepl.RelationMessage
+	typeMap   *pgtype.Map
+	xLogPos   pglogrepl.LSN
 }
 
 func NewSource(config connector.Config) (*Source, error) {
@@ -39,17 +40,14 @@ func NewSource(config connector.Config) (*Source, error) {
 		return nil, err
 	}
 	return &Source{
-		cfg:             cfg,
-		storage:         config.Storage,
-		relations:       make(map[uint32]*pglogrepl.RelationMessage), // TODO store
-		typeMap:         pgtype.NewMap(),
-		standByDeadline: time.Now().Add(cfg.StandbyTimeout),
+		cfg:       cfg,
+		storage:   config.Storage,
+		relations: make(map[uint32]*pglogrepl.RelationMessage),
+		typeMap:   pgtype.NewMap(),
 	}, nil
 }
 
-func (s *Source) Run() error {
-	ctx := context.Background()
-
+func (s *Source) Run(ctx context.Context) error {
 	// Init Kafka producer
 	sarCfg := sarama.NewConfig()
 	sarCfg.Net.MaxOpenRequests = 1
@@ -68,34 +66,34 @@ func (s *Source) Run() error {
 		return err
 	}
 
-	for {
-		err := s.handleReplication(ctx)
-		if err == nil {
-			continue
-		}
-		log.Error().Stack().Err(err).Msg("Handle event")
+	go s.healthCheck(ctx)
+	go s.listenMessages(ctx)
+	<-ctx.Done()
+	s.wg.Wait()
 
-		for {
-			err := s.startReplication(ctx)
-			if err == nil {
-				break
-			}
-			log.Error().Stack().Err(err).Msg("PostgreSQL: Connect and start replication")
-			time.Sleep(5 * time.Second)
-		}
+	log.Info().Msg("PostgreSQL: Close")
+	if err := s.conn.Close(context.Background()); err != nil {
+		log.Err(err).Msg("PostgreSQL: Close")
 	}
+	log.Info().Msg("Kafka: Close producer")
+	if err := s.prod.Close(); err != nil {
+		log.Err(err).Msg("Kafka: Close producer")
+	}
+	return nil
 }
 
 func (s *Source) Close() error {
-	return s.conn.Close(context.Background())
+	return nil
+	//return s.conn.Close(context.Background())
 }
 
 func (s *Source) startReplication(ctx context.Context) error {
 	log.Info().Msg("PostgreSQL: Connect")
-	var err error
-	if s.conn, err = pgconn.Connect(ctx, s.cfg.Pg.Url); err != nil {
+	conn, err := pgconn.Connect(ctx, s.cfg.Pg.Url)
+	if err != nil {
 		return errors.Wrap(err, "connect to PostgreSQL server")
 	}
+	s.conn = conn
 	if err := s.conn.CheckConn(); err != nil {
 		return errors.Wrap(err, "check connection")
 	}
@@ -139,85 +137,101 @@ func (s *Source) startReplication(ctx context.Context) error {
 		log.Warn().Msgf("PostgreSQL: LSN position is not found, using first available one from replication slot")
 	}
 
-	log.Info().Msgf("PostgreSQL: Start logical replication (LSN %s)", s.xLogPos)
-	if err := pglogrepl.StartReplication(ctx, s.conn, s.cfg.Pg.Slot, s.xLogPos, pglogrepl.StartReplicationOptions{
+	// Start replication
+	log.Info().Stringer("lsn", s.xLogPos).Msgf("PostgreSQL: Start logical replication")
+	err = pglogrepl.StartReplication(ctx, s.conn, s.cfg.Pg.Slot, s.xLogPos, pglogrepl.StartReplicationOptions{
 		PluginArgs: []string{
 			"proto_version '1'",
 			fmt.Sprintf("publication_names '%s'", s.cfg.Pg.Publication),
 			"messages 'true'",
 		},
 		Mode: pglogrepl.LogicalReplication,
-	}); err != nil {
-		return errors.Wrap(err, "start logical replication")
-	}
-
-	return nil
+	})
+	return errors.Wrap(err, "start logical replication")
 }
 
-func (s *Source) handleReplication(ctx context.Context) error {
-	if time.Now().After(s.standByDeadline) {
-		err := pglogrepl.SendStandbyStatusUpdate(ctx, s.conn, pglogrepl.StandbyStatusUpdate{WALWritePosition: s.xLogPos})
+func (s *Source) healthCheck(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(s.cfg.StandbyTimeout):
+			if s.conn.IsClosed() {
+				continue
+			}
+			err := pglogrepl.SendStandbyStatusUpdate(ctx, s.conn, pglogrepl.StandbyStatusUpdate{WALWritePosition: s.xLogPos})
+			if err != nil {
+				log.Error().Stack().Err(err).Stringer("lsn", s.xLogPos).Msg("SendStandbyStatusUpdate")
+				continue
+			}
+			log.Debug().Stringer("lsn", s.xLogPos).Msgf("PostgreSQL: Sent Standby status message")
+		}
+	}
+}
+
+func (s *Source) listenMessages(ctx context.Context) {
+MainLoop:
+	for {
+		msg, err := s.conn.ReceiveMessage(ctx)
 		if err != nil {
-			return errors.Wrapf(err, "SendStandbyStatusUpdate (LSN %s)", s.xLogPos)
-		}
-		log.Debug().Msgf("PostgreSQL: Sent Standby status message (LSN %s)", s.xLogPos)
-		s.standByDeadline = time.Now().Add(s.cfg.StandbyTimeout)
-	}
+			if errors.Is(err, context.Canceled) {
+				return
+			}
+			if pgconn.Timeout(err) {
+				continue
+			}
+			log.Error().Stack().Err(err).Msg("Receive message")
 
-	recCtx, cancel := context.WithDeadline(ctx, s.standByDeadline)
-	rawMsg, err := s.conn.ReceiveMessage(recCtx)
-	cancel()
-	if err != nil {
-		if pgconn.Timeout(err) {
-			return nil
+			for {
+				err := s.startReplication(ctx)
+				if err == nil {
+					continue MainLoop
+				}
+				log.Error().Stack().Err(err).Msg("Start replication")
+				time.Sleep(5 * time.Second)
+			}
 		}
-		return errors.Wrap(err, "receive message")
-	}
 
-	if errMsg, ok := rawMsg.(*pgproto3.ErrorResponse); ok {
+		for {
+			err := s.handleMessage(msg)
+			if err == nil {
+				break
+			}
+			log.Error().Stack().Err(err).Msg("Handle message")
+			time.Sleep(5 * time.Second)
+		}
+	}
+}
+
+func (s *Source) handleMessage(msg pgproto3.BackendMessage) error {
+	s.wg.Add(1)
+	defer s.wg.Done()
+
+	if errMsg, ok := msg.(*pgproto3.ErrorResponse); ok {
 		return errors.Errorf("Postgres WAL error: %+v", errMsg)
 	}
 
-	msg, ok := rawMsg.(*pgproto3.CopyData)
-	if !ok {
+	cd, ok := msg.(*pgproto3.CopyData)
+	if !ok || cd.Data[0] != pglogrepl.XLogDataByteID {
 		return nil
 	}
 
-	switch msg.Data[0] {
-	case pglogrepl.PrimaryKeepaliveMessageByteID:
-		pkm, err := pglogrepl.ParsePrimaryKeepaliveMessage(msg.Data[1:])
-		if err != nil {
-			return errors.Wrap(err, "ParsePrimaryKeepaliveMessage")
-		}
-		if pkm.ReplyRequested {
-			s.standByDeadline = time.Time{}
-		}
-	case pglogrepl.XLogDataByteID:
-		xLogPos, err := s.handleXLogData(msg.Data[1:])
-		if err != nil {
-			return err
-		}
-		if err := s.storage.Set("lsn", xLogPos); err != nil {
-			return err
-		}
-		s.xLogPos = xLogPos
-	}
-
-	return nil
-}
-
-func (s *Source) handleXLogData(src []byte) (pglogrepl.LSN, error) {
-	xld, err := pglogrepl.ParseXLogData(src)
+	xld, err := pglogrepl.ParseXLogData(cd.Data[1:])
 	if err != nil {
-		return 0, errors.Wrap(err, "ParseXLogData")
+		return errors.Wrap(err, "parse XLogData")
 	}
 
 	data, err := pglogrepl.Parse(xld.WALData)
 	if err != nil {
-		return 0, errors.Wrap(err, "Parse logical replication message")
+		return errors.Wrap(err, "parse WAL data")
 	}
-	log.Info().Msgf("PostgreSQL: Received message %T (WALStart %s ServerWALEnd %s ServerTime %s)",
-		data, xld.WALStart, xld.ServerWALEnd, xld.ServerTime)
+
+	log.Info().
+		Time("server_time", xld.ServerTime).
+		Stringer("lsn", s.xLogPos).
+		Stringer("wal_start", xld.WALStart).
+		Stringer("wal_end", xld.ServerWALEnd).
+		Msgf("PostgreSQL: Received message %T", data)
 
 	switch data := data.(type) {
 	case *pglogrepl.RelationMessage:
@@ -230,10 +244,15 @@ func (s *Source) handleXLogData(src []byte) (pglogrepl.LSN, error) {
 		err = s.writeEvent(data.RelationID, nil, xld.WALStart)
 	}
 	if err != nil {
-		return 0, err
+		return err
 	}
 
-	return xld.WALStart + pglogrepl.LSN(len(xld.WALData)), nil
+	xLogPos := xld.WALStart + pglogrepl.LSN(len(xld.WALData))
+	if err := s.storage.Set("lsn", xLogPos); err != nil {
+		return err
+	}
+	s.xLogPos = xLogPos
+	return nil
 }
 
 type Event struct {
@@ -278,22 +297,15 @@ func (s *Source) writeEvent(relationID uint32, cols []*pglogrepl.TupleDataColumn
 		TsMs:  time.Now().UnixMilli(),
 	}
 
-	//for {
-	_, _, err := s.prod.SendMessage(&sarama.ProducerMessage{
+	if _, _, err := s.prod.SendMessage(&sarama.ProducerMessage{
 		Topic: fmt.Sprintf("%s.%s.%s", s.cfg.Kafka.TopicPrefix, rel.Namespace, rel.RelationName),
 		Key:   sarama.StringEncoder(fmt.Sprintf(`{"id": %q"`, after["id"])),
 		Value: saramax.JsonEncoder(event),
-	})
-	if err != nil {
-		return errors.Wrap(err, "send event to Kafka")
+	}); err != nil {
+		return errors.Wrap(err, "send to Kafka")
 	}
-	//if err == nil {
-	//	break
-	//}
-	//log.Error().Stack().Err(err).Msg("Write to Kafka")
-	//time.Sleep(5 * time.Second)
-	//}
 
+	log.Info().Interface("event", event).Msg("Kafka: Event has been published")
 	return nil
 }
 

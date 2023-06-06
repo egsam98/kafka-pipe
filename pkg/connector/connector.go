@@ -1,6 +1,7 @@
 package connector
 
 import (
+	"context"
 	"io"
 
 	"github.com/pkg/errors"
@@ -11,7 +12,7 @@ import (
 type (
 	Connector interface {
 		io.Closer
-		Run() error
+		Run(ctx context.Context) error
 	}
 	Init   func(cfg Config) (Connector, error)
 	Config struct {
