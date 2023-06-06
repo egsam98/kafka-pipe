@@ -4,22 +4,16 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const LogPrefix = "Badger: "
-
 type loggerAdapter struct{}
 
-func (*loggerAdapter) Errorf(s string, i ...interface{}) {
-	log.Logger.Error().Msgf(LogPrefix+s, i...)
+func (*loggerAdapter) Errorf(s string, i ...any) {
+	log.Logger.Error().Msgf("Badger: "+s, i...)
 }
 
-func (*loggerAdapter) Warningf(s string, i ...interface{}) {
-	log.Logger.Warn().Msgf(LogPrefix+s, i...)
+func (*loggerAdapter) Warningf(s string, i ...any) {
+	log.Logger.Warn().Msgf("Badger: "+s, i...)
 }
 
-func (*loggerAdapter) Infof(s string, i ...interface{}) {
-	log.Logger.Debug().Msgf(LogPrefix+s, i...)
-}
+func (*loggerAdapter) Infof(string, ...any) {}
 
-func (*loggerAdapter) Debugf(s string, i ...interface{}) {
-	log.Logger.Debug().Msgf(LogPrefix+s, i...)
-}
+func (*loggerAdapter) Debugf(string, ...any) {}

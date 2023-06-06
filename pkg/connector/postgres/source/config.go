@@ -10,6 +10,7 @@ import (
 
 type Config struct {
 	Pg struct {
+		SkipDelete  bool     `yaml:"skip_delete"`
 		Url         string   `yaml:"url"`
 		Publication string   `yaml:"publication"`
 		Slot        string   `yaml:"slot"`

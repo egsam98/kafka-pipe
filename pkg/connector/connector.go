@@ -2,25 +2,23 @@ package connector
 
 import (
 	"context"
-	"io"
 
 	"github.com/pkg/errors"
 
 	"kafka-pipe/pkg/warden"
 )
 
-type (
-	Connector interface {
-		io.Closer
-		Run(ctx context.Context) error
-	}
-	Init   func(cfg Config) (Connector, error)
-	Config struct {
-		Name    string
-		Raw     []byte
-		Storage warden.Storage
-	}
-)
+type Connector interface {
+	Run(ctx context.Context) error
+}
+
+type Init func(cfg Config) (Connector, error)
+
+type Config struct {
+	Name    string
+	Raw     []byte
+	Storage warden.Storage
+}
 
 var connectors = make(map[string]Init)
 

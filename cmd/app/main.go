@@ -11,6 +11,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/rs/zerolog/pkgerrors"
+	"golang.org/x/sync/errgroup"
 	"gopkg.in/yaml.v3"
 
 	"kafka-pipe/pkg/connector"
@@ -81,25 +82,17 @@ func run() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	log.Info().
-		Str("name", cfg.Connector.Name).
-		Str("class", cfg.Connector.Class).
-		Msg("Run connector")
-	go func() {
-		if err := conn.Run(ctx); err != nil {
-			log.Fatal().Stack().Err(err).Msg("Run connector")
-		}
-	}()
-	//defer func() {
-	//	log.Info().Msg("Closing connector...")
-	//	if err := conn.Close(); err != nil {
-	//		log.Error().Stack().Err(err).Msg("Close connector")
-	//	}
-	//}()
-
-	//signals := make(chan os.Signal, 1)
+	log.Info().Str("name", cfg.Connector.Name).Str("class", cfg.Connector.Class).Msg("Run connector")
+	g, ctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		return conn.Run(ctx)
+	})
 
 	<-ctx.Done()
 	log.Info().Msg("Shutdown")
-	return nil
+	if err := g.Wait(); err != nil {
+		return err
+	}
+	log.Info().Msg("Connector stopped")
+	return storage.Close()
 }
