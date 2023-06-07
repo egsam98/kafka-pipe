@@ -10,7 +10,7 @@ import (
 
 type Config struct {
 	Pg struct {
-		SkipDelete  bool     `yaml:"skip_delete"`
+		SkipDelete  bool     `yaml:"skip.delete"`
 		Url         string   `yaml:"url"`
 		Publication string   `yaml:"publication"`
 		Slot        string   `yaml:"slot"`
@@ -18,17 +18,9 @@ type Config struct {
 	} `yaml:"pg"`
 	Kafka struct {
 		Brokers     []string `yaml:"brokers"`
-		TopicPrefix string   `yaml:"topic_prefix"`
+		TopicPrefix string   `yaml:"topic.prefix"`
 	} `yaml:"kafka"`
-	StandbyTimeout time.Duration
-}
-
-type URL struct {
-	url.URL
-}
-
-func (u *URL) UnmarshalJSON(src []byte) error {
-	return u.UnmarshalBinary(src)
+	HealthInterval time.Duration `yaml:"health.interval"`
 }
 
 func (c *Config) Parse(src []byte) error {
@@ -60,8 +52,8 @@ func (c *Config) Parse(src []byte) error {
 	if c.Kafka.TopicPrefix == "" {
 		return errors.New(`"kafka.topic_prefix" is required`)
 	}
-	if c.StandbyTimeout == 0 {
-		c.StandbyTimeout = 10 * time.Second
+	if c.HealthInterval == 0 {
+		c.HealthInterval = 10 * time.Second
 	}
 	return nil
 }

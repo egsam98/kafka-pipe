@@ -5,7 +5,7 @@ import (
 )
 
 func init() {
-	connector.Register("postgres.Source", func(cfg connector.Config) (connector.Connector, error) {
+	connector.Register("pg.Source", func(cfg connector.Config) (connector.Connector, error) {
 		return NewSource(cfg)
 	})
 }

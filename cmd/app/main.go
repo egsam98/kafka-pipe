@@ -15,7 +15,8 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"kafka-pipe/pkg/connector"
-	_ "kafka-pipe/pkg/connector/postgres/source"
+	_ "kafka-pipe/pkg/connector/pg/snapshot"
+	_ "kafka-pipe/pkg/connector/pg/source"
 	"kafka-pipe/pkg/warden/storage/badger"
 )
 
@@ -83,13 +84,9 @@ func run() error {
 	defer cancel()
 
 	log.Info().Str("name", cfg.Connector.Name).Str("class", cfg.Connector.Class).Msg("Run connector")
-	g, ctx := errgroup.WithContext(ctx)
-	g.Go(func() error {
-		return conn.Run(ctx)
-	})
+	var g errgroup.Group
+	g.Go(func() error { return conn.Run(ctx) })
 
-	<-ctx.Done()
-	log.Info().Msg("Shutdown")
 	if err := g.Wait(); err != nil {
 		return err
 	}

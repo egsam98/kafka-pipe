@@ -17,7 +17,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"kafka-pipe/pkg/connector"
-	"kafka-pipe/pkg/pg"
+	"kafka-pipe/pkg/connector/pg"
 	"kafka-pipe/pkg/saramax"
 	"kafka-pipe/pkg/warden"
 )
@@ -29,7 +29,7 @@ type Source struct {
 	wg        sync.WaitGroup
 	storage   warden.Storage
 	prod      sarama.SyncProducer
-	conn      *pgconn.PgConn
+	db        *pgconn.PgConn
 	relations map[uint32]*pglogrepl.RelationMessage
 	typeMap   *pgtype.Map
 	xLogPos   pglogrepl.LSN
@@ -75,7 +75,7 @@ func (s *Source) Run(ctx context.Context) error {
 	}
 
 	s.wg.Add(2)
-	go s.healthCheck(ctx)
+	go s.health(ctx)
 	go s.listenMessages(ctx)
 
 	// Shutdown
@@ -83,17 +83,9 @@ func (s *Source) Run(ctx context.Context) error {
 	s.wg.Wait()
 
 	s.log.Info().Msg("PostgreSQL: Close")
-	var errs []string
-	if err := s.conn.Close(context.Background()); err != nil {
-		errs = append(errs, err.Error())
-	}
+	s.db.Close(context.Background())
 	s.log.Info().Msg("Kafka: Close producer")
-	if err := s.prod.Close(); err != nil {
-		errs = append(errs, err.Error())
-	}
-	if len(errs) > 0 {
-		return errors.New(strings.Join(errs, ","))
-	}
+	s.prod.Close()
 	return nil
 }
 
@@ -103,27 +95,27 @@ func (s *Source) startReplication(ctx context.Context) error {
 	if err != nil {
 		return errors.Wrap(err, "connect to PostgreSQL server")
 	}
-	s.conn = conn
-	if err := s.conn.CheckConn(); err != nil {
+	s.db = conn
+	if err := s.db.CheckConn(); err != nil {
 		return errors.Wrap(err, "check connection")
 	}
 
 	// Create/edit publication
 	sql := fmt.Sprintf("CREATE PUBLICATION %s FOR TABLE %s", s.cfg.Pg.Publication, strings.Join(s.cfg.Pg.Tables, ", "))
-	switch _, err := s.conn.Exec(ctx, sql).ReadAll(); {
+	switch _, err := s.db.Exec(ctx, sql).ReadAll(); {
 	case err == nil:
 		s.log.Info().Msg("PostgreSQL: " + sql)
 	case pg.Is(err, pg.DuplicateObject):
 		sql := fmt.Sprintf("ALTER PUBLICATION %s SET TABLE %s", s.cfg.Pg.Publication, strings.Join(s.cfg.Pg.Tables, ", "))
 		s.log.Info().Msg("PostgreSQL: " + sql)
-		if _, err := s.conn.Exec(ctx, sql).ReadAll(); err != nil {
+		if _, err := s.db.Exec(ctx, sql).ReadAll(); err != nil {
 			return errors.Wrap(err, sql)
 		}
 	default:
 		return errors.Wrap(err, sql)
 	}
 
-	sysIdent, err := pglogrepl.IdentifySystem(ctx, s.conn)
+	sysIdent, err := pglogrepl.IdentifySystem(ctx, s.db)
 	if err != nil {
 		return errors.Wrap(err, "identify system")
 	}
@@ -132,7 +124,7 @@ func (s *Source) startReplication(ctx context.Context) error {
 	// Create replication slot if not exists
 	switch _, err := pglogrepl.CreateReplicationSlot(
 		ctx,
-		s.conn,
+		s.db,
 		s.cfg.Pg.Slot,
 		Plugin,
 		pglogrepl.CreateReplicationSlotOptions{Mode: pglogrepl.LogicalReplication},
@@ -153,7 +145,7 @@ func (s *Source) startReplication(ctx context.Context) error {
 
 	// Start replication
 	s.log.Info().Msgf("PostgreSQL: Start logical replication")
-	err = pglogrepl.StartReplication(ctx, s.conn, s.cfg.Pg.Slot, s.xLogPos, pglogrepl.StartReplicationOptions{
+	err = pglogrepl.StartReplication(ctx, s.db, s.cfg.Pg.Slot, s.xLogPos, pglogrepl.StartReplicationOptions{
 		PluginArgs: []string{
 			"proto_version '1'",
 			fmt.Sprintf("publication_names '%s'", s.cfg.Pg.Publication),
@@ -164,17 +156,18 @@ func (s *Source) startReplication(ctx context.Context) error {
 	return errors.Wrap(err, "start logical replication")
 }
 
-func (s *Source) healthCheck(ctx context.Context) {
+func (s *Source) health(ctx context.Context) {
 	defer s.wg.Done()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(s.cfg.StandbyTimeout):
-			if s.conn.IsClosed() {
+		case <-time.After(s.cfg.HealthInterval):
+			if s.db.IsClosed() {
 				continue
 			}
-			err := pglogrepl.SendStandbyStatusUpdate(ctx, s.conn, pglogrepl.StandbyStatusUpdate{WALWritePosition: s.xLogPos})
+			err := pglogrepl.SendStandbyStatusUpdate(ctx, s.db, pglogrepl.StandbyStatusUpdate{WALWritePosition: s.xLogPos})
 			if err != nil {
 				s.log.Err(err).Msg("PostgreSQL: SendStandbyStatusUpdate")
 				continue
@@ -188,7 +181,7 @@ func (s *Source) listenMessages(ctx context.Context) {
 	defer s.wg.Done()
 MainLoop:
 	for {
-		msg, err := s.conn.ReceiveMessage(ctx)
+		msg, err := s.db.ReceiveMessage(ctx)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return
@@ -214,7 +207,7 @@ MainLoop:
 		}
 
 		for {
-			err := s.handleMessage(ctx, msg)
+			err := s.handleMessage(msg)
 			if err == nil {
 				break
 			}
@@ -229,7 +222,7 @@ MainLoop:
 	}
 }
 
-func (s *Source) handleMessage(ctx context.Context, msg pgproto3.BackendMessage) error {
+func (s *Source) handleMessage(msg pgproto3.BackendMessage) error {
 	if errMsg, ok := msg.(*pgproto3.ErrorResponse); ok {
 		return errors.Errorf("Postgres WAL error: %+v", errMsg)
 	}
@@ -333,6 +326,7 @@ func (s *Source) writeEvent(relationID uint32, cols []*pglogrepl.TupleDataColumn
 	return nil
 }
 
+// TODO rework
 func (s *Source) decodeTextColumnData(data []byte, oid uint32) (interface{}, error) {
 	if typ, ok := s.typeMap.TypeForOID(oid); ok && typ.Name != "uuid" && typ.Name != "numeric" {
 		return typ.Codec.DecodeValue(s.typeMap, oid, pgtype.TextFormatCode, data)
