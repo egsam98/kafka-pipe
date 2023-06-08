@@ -21,7 +21,6 @@ type Snapshot struct {
 	db       *pgxpool.Pool
 	prod     sarama.SyncProducer
 	sarAdmin sarama.ClusterAdmin
-	bar      *progressbar.ProgressBar
 }
 
 func NewSnapshot(config connector.Config) (*Snapshot, error) {
@@ -87,87 +86,100 @@ func (s *Snapshot) run(ctx context.Context, table string) error {
 		}
 	}
 
-	resultCh, err := s.query(ctx, table)
+	res, err := s.query(ctx, table)
 	if err != nil {
 		return err
 	}
 
-	batch := make([]*sarama.ProducerMessage, 0, s.cfg.Kafka.Batch.Size)
+	bar := progressbar.Default(res.Count, "Snapshot of "+table)
+	batch := make([]*sarama.ProducerMessage, 0, s.cfg.Kafka.BatchSize)
+Loop:
 	for {
-		res, ok := <-resultCh
-		if ok {
-			batch = append(batch, &sarama.ProducerMessage{
-				Topic: topic,
-				Key:   sarama.StringEncoder(fmt.Sprintf(`{"id": %q}`, res.Data["id"])),
-				Value: saramax.JsonEncoder(res.Data),
-			})
-			if len(batch) < s.cfg.Kafka.Batch.Size {
-				continue
+		select {
+		case data, ok := <-res.Data:
+			if ok {
+				batch = append(batch, data)
+				if len(batch) < s.cfg.Kafka.BatchSize {
+					continue
+				}
 			}
-		}
 
-		for {
-			err := s.prod.SendMessages(batch)
-			if err == nil {
-				break
+			for {
+				err := s.prod.SendMessages(batch)
+				if err == nil {
+					break
+				}
+				log.Err(err).Msg("Send to Kafka")
+				time.Sleep(time.Second)
 			}
-			log.Err(err).Msg("Send to Kafka")
-			time.Sleep(time.Second)
-		}
 
-		if err := s.bar.Add(len(batch)); err != nil {
+			_ = bar.Add(len(batch))
+
+			if !ok {
+				break Loop
+			}
+			batch = make([]*sarama.ProducerMessage, 0, s.cfg.Kafka.BatchSize)
+		case err := <-res.Errors:
+			_ = bar.Clear()
+			if errors.Is(err, context.Canceled) {
+				log.Info().Msg("Interrupt")
+				return nil
+			}
 			return err
 		}
-
-		if !ok {
-			break
-		}
-		batch = make([]*sarama.ProducerMessage, 0, s.cfg.Kafka.Batch.Size)
 	}
 
-	select {
-	case <-ctx.Done():
-		s.bar.Exit()
-	default:
-		s.bar.Close()
+	return bar.Close()
+}
+
+type queryResult struct {
+	Count  int64
+	Data   chan *sarama.ProducerMessage
+	Errors chan error
+}
+
+func (s *Snapshot) query(ctx context.Context, table string) (*queryResult, error) {
+	sql := fmt.Sprintf(`SELECT COUNT(data) FROM (SELECT * FROM %s %s) data`, table, s.cfg.Pg.Condition)
+	log.Info().Msg("PostgreSQL: " + sql)
+	var count int64
+	if err := pgxscan.Get(ctx, s.db, &count, sql); err != nil {
+		return nil, errors.Wrap(err, "query snapshot rows count")
 	}
-	log.Info().Msg("Snapshot finished")
-	return nil
-}
 
-type scanResult struct {
-	Data map[string]any
-	Err  error
-}
-
-func (s *Snapshot) query(ctx context.Context, table string) (<-chan scanResult, error) {
-	sql := fmt.Sprintf(`SELECT data.*, count(data.*) OVER() AS total FROM (SELECT * FROM %s %s) data`, table, s.cfg.Pg.Condition)
-	log.Info().Msg(sql)
+	sql = fmt.Sprintf(`SELECT data.*, count(data.*) OVER() AS total FROM (SELECT * FROM %s %s) data`, table, s.cfg.Pg.Condition)
+	log.Info().Msg("PostgreSQL: " + sql)
 	rows, err := s.db.Query(ctx, sql)
 	if err != nil {
 		return nil, errors.Wrap(err, "query snapshot")
 	}
 
-	msgs := make(chan scanResult)
+	res := &queryResult{
+		Count:  count,
+		Data:   make(chan *sarama.ProducerMessage, s.cfg.Kafka.BatchSize),
+		Errors: make(chan error),
+	}
+
 	go func() {
 		defer rows.Close()
-		defer close(msgs)
+		defer close(res.Data)
 
 		for rows.Next() {
-			var m map[string]any
-			if err := pgxscan.ScanRow(&m, rows); err != nil {
-				msgs <- scanResult{Err: errors.Wrap(err, "scan")}
+			var data map[string]any
+			if err := pgxscan.ScanRow(&data, rows); err != nil {
+				res.Errors <- errors.Wrap(err, "scan")
 				return
 			}
-			if s.bar == nil {
-				s.bar = progressbar.Default(m["total"].(int64))
+			res.Data <- &sarama.ProducerMessage{
+				Topic: s.cfg.Kafka.Topic.Prefix + "." + table,
+				Key:   sarama.StringEncoder(fmt.Sprintf(`{"id": %q}`, data["id"])),
+				Value: saramax.JsonEncoder(data),
 			}
-			msgs <- scanResult{Data: m}
 		}
 
 		if err := rows.Err(); err != nil {
-			msgs <- scanResult{Err: errors.Wrap(err, "rows error")}
+			res.Errors <- errors.Wrap(err, "rows error")
 		}
 	}()
-	return msgs, nil
+
+	return res, nil
 }

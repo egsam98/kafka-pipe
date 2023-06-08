@@ -2,7 +2,6 @@ package snapshot
 
 import (
 	"net/url"
-	"time"
 
 	"github.com/pkg/errors"
 	"gopkg.in/yaml.v3"
@@ -23,10 +22,7 @@ type Config struct {
 			CleanupPolicy     string `yaml:"cleanup.policy"`
 			CompressionType   string `yaml:"compression.type"`
 		} `yaml:"topic"`
-		Batch struct {
-			Size    int           `yaml:"size"`
-			Timeout time.Duration `yaml:"timeout"`
-		} `yaml:"batch"`
+		BatchSize int `yaml:"batch.size"`
 	} `yaml:"kafka"`
 }
 
@@ -37,11 +33,8 @@ func (c *Config) Parse(src []byte) error {
 	if _, err := url.Parse(c.Pg.Url); err != nil {
 		return errors.Wrap(err, `"pg.url" is invalid`)
 	}
-	if c.Kafka.Batch.Size == 0 {
-		c.Kafka.Batch.Size = 10_000
-	}
-	if c.Kafka.Batch.Timeout == 0 {
-		c.Kafka.Batch.Timeout = 5 * time.Second
+	if c.Kafka.BatchSize == 0 {
+		c.Kafka.BatchSize = 10_000
 	}
 	if len(c.Pg.Tables) == 0 {
 		return errors.New(`"pg.tables" list is required`)

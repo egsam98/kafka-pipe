@@ -65,6 +65,7 @@ func (s *Source) Run(ctx context.Context) error {
 	sarCfg.Producer.Return.Successes = true
 	sarCfg.Producer.Retry.Max = 10
 	sarCfg.Producer.Retry.Backoff = 100 * time.Millisecond
+	sarCfg.Metadata.AllowAutoTopicCreation = false
 	var err error
 	if s.prod, err = sarama.NewSyncProducer(s.cfg.Kafka.Brokers, sarCfg); err != nil {
 		return errors.Wrap(err, "init Kafka producer")
@@ -302,27 +303,33 @@ func (s *Source) writeEvent(relationID uint32, cols []*pglogrepl.TupleDataColumn
 		}
 	}
 
-	event := Event{
-		Source: struct {
-			Table string `json:"table"`
-			LSN   string `json:"lsn"`
-		}{
-			Table: rel.Namespace + "." + rel.RelationName,
-			LSN:   lsn.String(),
-		},
-		After: after,
-		TsMs:  time.Now().UnixMilli(),
-	}
-
-	if _, _, err := s.prod.SendMessage(&sarama.ProducerMessage{
-		Topic: fmt.Sprintf("%s.%s.%s", s.cfg.Kafka.TopicPrefix, rel.Namespace, rel.RelationName),
-		Key:   sarama.StringEncoder(fmt.Sprintf(`{"id": %q}`, after["id"])),
-		Value: saramax.JsonEncoder(event),
-	}); err != nil {
+	key := sarama.StringEncoder(fmt.Sprintf(`{"id": %q}`, after["id"]))
+	topic := fmt.Sprintf("%s.%s.%s", s.cfg.Kafka.TopicPrefix, rel.Namespace, rel.RelationName)
+	offset, part, err := s.prod.SendMessage(&sarama.ProducerMessage{
+		Topic: topic,
+		Key:   key,
+		Value: saramax.JsonEncoder(Event{
+			Source: struct {
+				Table string `json:"table"`
+				LSN   string `json:"lsn"`
+			}{
+				Table: rel.Namespace + "." + rel.RelationName,
+				LSN:   lsn.String(),
+			},
+			After: after,
+			TsMs:  time.Now().UnixMilli(),
+		}),
+	})
+	if err != nil {
 		return errors.Wrap(err, "send to Kafka")
 	}
 
-	s.log.Info().Interface("event", event).Msg("Kafka: Event has been published")
+	s.log.Info().
+		Int32("offset", offset).
+		Int64("partition", part).
+		Str("topic", topic).
+		Str("message.key", string(key)).
+		Msg("Kafka: Event has been published")
 	return nil
 }
 
