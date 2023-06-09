@@ -2,6 +2,7 @@ package snapshot
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -13,7 +14,6 @@ import (
 	"github.com/schollz/progressbar/v3"
 
 	"kafka-pipe/pkg/connector"
-	"kafka-pipe/pkg/saramax"
 )
 
 type Snapshot struct {
@@ -169,10 +169,16 @@ func (s *Snapshot) query(ctx context.Context, table string) (*queryResult, error
 				res.Errors <- errors.Wrap(err, "scan")
 				return
 			}
+			value, err := json.Marshal(data)
+			if err != nil {
+				res.Errors <- errors.Wrapf(err, "marshal %+v", data)
+				return
+			}
+
 			res.Data <- &sarama.ProducerMessage{
 				Topic: s.cfg.Kafka.Topic.Prefix + "." + table,
 				Key:   sarama.StringEncoder(fmt.Sprintf(`{"id": %q}`, data["id"])),
-				Value: saramax.JsonEncoder(data),
+				Value: sarama.ByteEncoder(value),
 			}
 		}
 

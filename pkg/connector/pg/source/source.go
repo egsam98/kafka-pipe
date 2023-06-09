@@ -2,6 +2,7 @@ package source
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -18,7 +19,6 @@ import (
 
 	"kafka-pipe/pkg/connector"
 	"kafka-pipe/pkg/connector/pg"
-	"kafka-pipe/pkg/saramax"
 	"kafka-pipe/pkg/warden"
 )
 
@@ -305,20 +305,24 @@ func (s *Source) writeEvent(relationID uint32, cols []*pglogrepl.TupleDataColumn
 
 	key := sarama.StringEncoder(fmt.Sprintf(`{"id": %q}`, after["id"]))
 	topic := fmt.Sprintf("%s.%s.%s", s.cfg.Kafka.TopicPrefix, rel.Namespace, rel.RelationName)
+	value, err := json.Marshal(Event{
+		Source: struct {
+			Table string `json:"table"`
+			LSN   string `json:"lsn"`
+		}{
+			Table: rel.Namespace + "." + rel.RelationName,
+			LSN:   lsn.String(),
+		},
+		After: after,
+		TsMs:  time.Now().UnixMilli(),
+	})
+	if err != nil {
+		return errors.Wrap(err, "marshal event")
+	}
 	offset, part, err := s.prod.SendMessage(&sarama.ProducerMessage{
 		Topic: topic,
 		Key:   key,
-		Value: saramax.JsonEncoder(Event{
-			Source: struct {
-				Table string `json:"table"`
-				LSN   string `json:"lsn"`
-			}{
-				Table: rel.Namespace + "." + rel.RelationName,
-				LSN:   lsn.String(),
-			},
-			After: after,
-			TsMs:  time.Now().UnixMilli(),
-		}),
+		Value: sarama.ByteEncoder(value),
 	})
 	if err != nil {
 		return errors.Wrap(err, "send to Kafka")
