@@ -16,3 +16,6 @@ lint: ## Run linter
 
 build: ## Build docker image
 	docker build -t $(IMAGE):$(IMAGE_TAG) .
+
+push: ## Push built docker image to DockerHub
+	docker push $(IMAGE):$(IMAGE_TAG)
