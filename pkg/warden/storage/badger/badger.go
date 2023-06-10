@@ -9,6 +9,8 @@ import (
 	"kafka-pipe/pkg/warden"
 )
 
+const Folder = "data"
+
 type Badger struct {
 	namespace string
 	db        *badger.DB
@@ -19,8 +21,9 @@ func NewBadger(namespace string) *Badger {
 }
 
 func (b *Badger) Open() (err error) {
-	opts := badger.DefaultOptions("warden").WithLogger(new(loggerAdapter))
-	b.db, err = badger.Open(opts)
+	b.db, err = badger.Open(badger.
+		DefaultOptions(Folder).
+		WithLogger(new(loggerAdapter)))
 	return
 }
 

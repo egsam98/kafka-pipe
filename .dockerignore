@@ -1,4 +1,5 @@
 .idea/
 *.yaml
+*.yml
 Dockerfile
 Makefile
