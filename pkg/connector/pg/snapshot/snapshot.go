@@ -7,13 +7,14 @@ import (
 	"time"
 
 	"github.com/Shopify/sarama"
-	"github.com/georgysavva/scany/v2/pgxscan"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
 	"github.com/schollz/progressbar/v3"
 
 	"kafka-pipe/pkg/connector"
+	"kafka-pipe/pkg/connector/pg"
 )
 
 type Snapshot struct {
@@ -52,7 +53,15 @@ func (s *Snapshot) Run(ctx context.Context) error {
 	}
 	defer s.prod.Close()
 
-	if s.db, err = pgxpool.New(ctx, s.cfg.Pg.Url); err != nil {
+	poolCfg, err := pgxpool.ParseConfig(s.cfg.Pg.Url)
+	if err != nil {
+		return errors.Wrap(err, "parse PostgreSQL connection URL")
+	}
+	poolCfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+		pg.RegisterTypes(conn.TypeMap())
+		return nil
+	}
+	if s.db, err = pgxpool.NewWithConfig(ctx, poolCfg); err != nil {
 		return errors.Wrap(err, "connect to PostgreSQL")
 	}
 	defer s.db.Close()
@@ -141,15 +150,18 @@ type queryResult struct {
 func (s *Snapshot) query(ctx context.Context, table string) (*queryResult, error) {
 	sql := fmt.Sprintf(`SELECT COUNT(data) FROM (SELECT * FROM %s %s) data`, table, s.cfg.Pg.Condition)
 	log.Info().Msg("PostgreSQL: " + sql)
-	var count int64
-	if err := pgxscan.Get(ctx, s.db, &count, sql); err != nil {
+	rows, err := s.db.Query(ctx, sql)
+	if err != nil {
+		return nil, errors.Wrap(err, "query rows count")
+	}
+	count, err := pgx.CollectOneRow(rows, pgx.RowTo[int64])
+	if err != nil {
 		return nil, errors.Wrap(err, "query snapshot rows count")
 	}
 
 	sql = fmt.Sprintf(`SELECT data.*, count(data.*) OVER() AS total FROM (SELECT * FROM %s %s) data`, table, s.cfg.Pg.Condition)
 	log.Info().Msg("PostgreSQL: " + sql)
-	rows, err := s.db.Query(ctx, sql)
-	if err != nil {
+	if rows, err = s.db.Query(ctx, sql); err != nil {
 		return nil, errors.Wrap(err, "query snapshot")
 	}
 
@@ -164,9 +176,9 @@ func (s *Snapshot) query(ctx context.Context, table string) (*queryResult, error
 		defer close(res.Data)
 
 		for rows.Next() {
-			var data map[string]any
-			if err := pgxscan.ScanRow(&data, rows); err != nil {
-				res.Errors <- errors.Wrap(err, "scan")
+			data, err := pgx.RowToMap(rows)
+			if err != nil {
+				res.Errors <- errors.Wrap(err, "scan into map")
 				return
 			}
 			value, err := json.Marshal(data)

@@ -48,6 +48,7 @@ func NewSource(config connector.Config) (*Source, error) {
 		relations: make(map[uint32]*pglogrepl.RelationMessage),
 		typeMap:   pgtype.NewMap(),
 	}
+	pg.RegisterTypes(s.typeMap)
 	s.log = log.Logger.
 		With().
 		Logger().
@@ -91,12 +92,13 @@ func (s *Source) Run(ctx context.Context) error {
 }
 
 func (s *Source) startReplication(ctx context.Context) error {
+	// Connect to PostgreSQL
 	s.log.Info().Msg("PostgreSQL: Connect")
-	conn, err := pgconn.Connect(ctx, s.cfg.Pg.Url)
+	db, err := pgconn.Connect(ctx, s.cfg.Pg.Url)
 	if err != nil {
 		return errors.Wrap(err, "connect to PostgreSQL server")
 	}
-	s.db = conn
+	s.db = db
 	if err := s.db.CheckConn(); err != nil {
 		return errors.Wrap(err, "check connection")
 	}
@@ -288,19 +290,34 @@ func (s *Source) writeEvent(relationID uint32, cols []*pglogrepl.TupleDataColumn
 		return errors.Errorf("unknown relation ID=%d", relationID)
 	}
 
+	// Decode columns tuple into Go map
 	after := make(map[string]any)
 	for i, col := range cols {
-		colName := rel.Columns[i].Name
+		var value any
 		switch col.DataType {
 		case 'n': // null
-			after[colName] = nil
-		case 't': // text
-			val, err := s.decodeTextColumnData(col.Data, rel.Columns[i].DataType)
-			if err != nil {
-				return errors.Wrap(err, "decoding column data")
+		case 't', 'b':
+			var format int16
+			switch col.DataType {
+			case 't': // text
+				format = pgtype.TextFormatCode
+			case 'b': // binary
+				format = pgtype.BinaryFormatCode
 			}
-			after[colName] = val
+
+			oid := rel.Columns[i].DataType
+			typ, ok := s.typeMap.TypeForOID(oid)
+			if !ok {
+				value = string(col.Data)
+				break
+			}
+			var err error
+			if value, err = typ.Codec.DecodeValue(s.typeMap, oid, format, col.Data); err != nil {
+				return errors.Errorf("decode %q (OID=%d, format=%d)", string(col.Data), oid, format)
+			}
 		}
+
+		after[rel.Columns[i].Name] = value
 	}
 
 	key := sarama.StringEncoder(fmt.Sprintf(`{"id": %q}`, after["id"]))
@@ -335,14 +352,6 @@ func (s *Source) writeEvent(relationID uint32, cols []*pglogrepl.TupleDataColumn
 		Str("message.key", string(key)).
 		Msg("Kafka: Event has been published")
 	return nil
-}
-
-// TODO rework
-func (s *Source) decodeTextColumnData(data []byte, oid uint32) (interface{}, error) {
-	if typ, ok := s.typeMap.TypeForOID(oid); ok && typ.Name != "uuid" && typ.Name != "numeric" {
-		return typ.Codec.DecodeValue(s.typeMap, oid, pgtype.TextFormatCode, data)
-	}
-	return string(data), nil
 }
 
 func (s *Source) lsnHook() zerolog.HookFunc {
