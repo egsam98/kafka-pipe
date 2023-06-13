@@ -99,7 +99,7 @@ func (s *Snapshot) run(ctx context.Context, table string) error {
 	if err != nil {
 		return err
 	}
-	return s.handleQuery(table, res)
+	return s.handleQuery(ctx, table, res)
 }
 
 type queryResult struct {
@@ -163,10 +163,10 @@ func (s *Snapshot) query(ctx context.Context, table string) (*queryResult, error
 	return res, nil
 }
 
-func (s *Snapshot) handleQuery(table string, res *queryResult) error {
+func (s *Snapshot) handleQuery(ctx context.Context, table string, res *queryResult) error {
 	bar := progressbar.Default(res.Count, "Snapshot of "+table)
 	batch := make([]*sarama.ProducerMessage, 0, s.cfg.Kafka.BatchSize)
-Loop:
+MainLoop:
 	for {
 		select {
 		case data, ok := <-res.Data:
@@ -183,13 +183,18 @@ Loop:
 					break
 				}
 				log.Err(err).Msg("Send to Kafka")
-				time.Sleep(time.Second)
+
+				select {
+				case <-ctx.Done():
+					return nil
+				case <-time.After(5 * time.Second):
+				}
 			}
 
 			_ = bar.Add(len(batch))
 
 			if !ok {
-				break Loop
+				break MainLoop
 			}
 			batch = make([]*sarama.ProducerMessage, 0, s.cfg.Kafka.BatchSize)
 		case err := <-res.Errors:
