@@ -17,8 +17,14 @@ type Config struct {
 		Tables      []string `yaml:"tables"`
 	} `yaml:"pg"`
 	Kafka struct {
-		Brokers     []string `yaml:"brokers"`
-		TopicPrefix string   `yaml:"topic.prefix"`
+		Brokers []string `yaml:"brokers"`
+		Topic   struct {
+			Prefix            string `yaml:"prefix"`
+			ReplicationFactor int16  `yaml:"replication.factor"`
+			Partitions        int32  `yaml:"partitions"`
+			CleanupPolicy     string `yaml:"cleanup.policy"`
+			CompressionType   string `yaml:"compression.type"`
+		} `yaml:"topic"`
 	} `yaml:"kafka"`
 	HealthInterval time.Duration `yaml:"health.interval"`
 }
@@ -49,8 +55,20 @@ func (c *Config) Parse(src []byte) error {
 	if len(c.Kafka.Brokers) == 0 {
 		return errors.New(`"kafka.brokers" list is required`)
 	}
-	if c.Kafka.TopicPrefix == "" {
+	if c.Kafka.Topic.Prefix == "" {
 		return errors.New(`"kafka.topic_prefix" is required`)
+	}
+	if c.Kafka.Topic.ReplicationFactor == 0 {
+		c.Kafka.Topic.ReplicationFactor = 1
+	}
+	if c.Kafka.Topic.Partitions == 0 {
+		c.Kafka.Topic.Partitions = 1
+	}
+	if c.Kafka.Topic.CompressionType == "" {
+		c.Kafka.Topic.CompressionType = "producer"
+	}
+	if c.Kafka.Topic.CleanupPolicy == "" {
+		c.Kafka.Topic.CleanupPolicy = "delete"
 	}
 	if c.HealthInterval == 0 {
 		c.HealthInterval = 10 * time.Second

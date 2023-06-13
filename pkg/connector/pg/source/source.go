@@ -57,6 +57,28 @@ func NewSource(config connector.Config) (*Source, error) {
 }
 
 func (s *Source) Run(ctx context.Context) error {
+	sarAdmin, err := sarama.NewClusterAdmin(s.cfg.Kafka.Brokers, nil)
+	if err != nil {
+		return errors.Wrap(err, "init Kafka admin")
+	}
+	// Create topics if not exists
+	for _, table := range s.cfg.Pg.Tables {
+		topic := s.cfg.Kafka.Topic.Prefix + "." + table
+		if err := sarAdmin.CreateTopic(topic, &sarama.TopicDetail{
+			NumPartitions:     s.cfg.Kafka.Topic.Partitions,
+			ReplicationFactor: s.cfg.Kafka.Topic.ReplicationFactor,
+			ConfigEntries: map[string]*string{
+				"compression.type": &s.cfg.Kafka.Topic.CompressionType,
+				"cleanup.policy":   &s.cfg.Kafka.Topic.CleanupPolicy,
+			},
+		}, false); err != nil {
+			if !errors.Is(err, sarama.ErrTopicAlreadyExists) {
+				return errors.Wrapf(err, "create topic %q", topic)
+			}
+		}
+	}
+	sarAdmin.Close()
+
 	// Init Kafka producer
 	sarCfg := sarama.NewConfig()
 	sarCfg.Net.MaxOpenRequests = 1
@@ -67,7 +89,6 @@ func (s *Source) Run(ctx context.Context) error {
 	sarCfg.Producer.Retry.Max = 10
 	sarCfg.Producer.Retry.Backoff = 100 * time.Millisecond
 	sarCfg.Metadata.AllowAutoTopicCreation = false
-	var err error
 	if s.prod, err = sarama.NewSyncProducer(s.cfg.Kafka.Brokers, sarCfg); err != nil {
 		return errors.Wrap(err, "init Kafka producer")
 	}
@@ -321,7 +342,7 @@ func (s *Source) writeEvent(relationID uint32, cols []*pglogrepl.TupleDataColumn
 	}
 
 	key := sarama.StringEncoder(fmt.Sprintf(`{"id": %q}`, after["id"]))
-	topic := fmt.Sprintf("%s.%s.%s", s.cfg.Kafka.TopicPrefix, rel.Namespace, rel.RelationName)
+	topic := fmt.Sprintf("%s.%s.%s", s.cfg.Kafka.Topic.Prefix, rel.Namespace, rel.RelationName)
 	value, err := json.Marshal(Event{
 		Source: struct {
 			Table string `json:"table"`
