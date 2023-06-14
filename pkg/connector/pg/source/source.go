@@ -333,8 +333,9 @@ func (s *Source) writeEvent(relationID uint32, cols []*pglogrepl.TupleDataColumn
 		data[rel.Columns[i].Name] = value
 	}
 
+	table := rel.Namespace + "." + rel.RelationName
+	topic := s.cfg.Kafka.Topic.Prefix + "." + table
 	key := sarama.StringEncoder(fmt.Sprintf(`{"id": %q}`, data["id"]))
-	topic := fmt.Sprintf("%s.%s.%s", s.cfg.Kafka.Topic.Prefix, rel.Namespace, rel.RelationName)
 	value, err := json.Marshal(data)
 	if err != nil {
 		return errors.Wrap(err, "marshal event data")
@@ -351,6 +352,10 @@ func (s *Source) writeEvent(relationID uint32, cols []*pglogrepl.TupleDataColumn
 			{
 				Key:   []byte("ts_ms"),
 				Value: []byte(strconv.FormatInt(time.Now().UnixMilli(), 10)),
+			},
+			{
+				Key:   []byte("table"),
+				Value: []byte(table),
 			},
 		},
 	})
