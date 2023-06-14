@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -32,7 +33,7 @@ type Source struct {
 	db        *pgconn.PgConn
 	relations map[uint32]*pglogrepl.RelationMessage
 	typeMap   *pgtype.Map
-	xLogPos   pglogrepl.LSN
+	lsn       pglogrepl.LSN
 	log       zerolog.Logger
 }
 
@@ -160,7 +161,7 @@ func (s *Source) startReplication(ctx context.Context) error {
 		return errors.Wrapf(err, "create replication slot %q", s.cfg.Pg.Slot)
 	}
 
-	if err := s.storage.Get("lsn", &s.xLogPos); err != nil {
+	if err := s.storage.Get("lsn", &s.lsn); err != nil {
 		if !errors.Is(err, warden.ErrNotFound) {
 			return err
 		}
@@ -169,7 +170,7 @@ func (s *Source) startReplication(ctx context.Context) error {
 
 	// Start replication
 	s.log.Info().Msgf("PostgreSQL: Start logical replication")
-	err = pglogrepl.StartReplication(ctx, s.db, s.cfg.Pg.Slot, s.xLogPos, pglogrepl.StartReplicationOptions{
+	err = pglogrepl.StartReplication(ctx, s.db, s.cfg.Pg.Slot, s.lsn, pglogrepl.StartReplicationOptions{
 		PluginArgs: []string{
 			"proto_version '1'",
 			fmt.Sprintf("publication_names '%s'", s.cfg.Pg.Publication),
@@ -191,7 +192,7 @@ func (s *Source) health(ctx context.Context) {
 			if s.db.IsClosed() {
 				continue
 			}
-			err := pglogrepl.SendStandbyStatusUpdate(ctx, s.db, pglogrepl.StandbyStatusUpdate{WALWritePosition: s.xLogPos})
+			err := pglogrepl.SendStandbyStatusUpdate(ctx, s.db, pglogrepl.StandbyStatusUpdate{WALWritePosition: s.lsn})
 			if err != nil {
 				s.log.Err(err).Msg("PostgreSQL: SendStandbyStatusUpdate")
 				continue
@@ -292,17 +293,8 @@ func (s *Source) handleMessage(msg pgproto3.BackendMessage) error {
 	if err := s.storage.Set("lsn", xLogPos); err != nil {
 		return err
 	}
-	s.xLogPos = xLogPos
+	s.lsn = xLogPos
 	return nil
-}
-
-type Event struct {
-	Source struct {
-		Table string `json:"table"`
-		LSN   string `json:"lsn"`
-	} `json:"source"`
-	After map[string]any `json:"after"`
-	TsMs  int64          `json:"ts_ms"`
 }
 
 func (s *Source) writeEvent(relationID uint32, cols []*pglogrepl.TupleDataColumn, lsn pglogrepl.LSN) error {
@@ -312,7 +304,7 @@ func (s *Source) writeEvent(relationID uint32, cols []*pglogrepl.TupleDataColumn
 	}
 
 	// Decode columns tuple into Go map
-	after := make(map[string]any)
+	data := make(map[string]any)
 	for i, col := range cols {
 		var value any
 		switch col.DataType {
@@ -338,29 +330,29 @@ func (s *Source) writeEvent(relationID uint32, cols []*pglogrepl.TupleDataColumn
 			}
 		}
 
-		after[rel.Columns[i].Name] = value
+		data[rel.Columns[i].Name] = value
 	}
 
-	key := sarama.StringEncoder(fmt.Sprintf(`{"id": %q}`, after["id"]))
+	key := sarama.StringEncoder(fmt.Sprintf(`{"id": %q}`, data["id"]))
 	topic := fmt.Sprintf("%s.%s.%s", s.cfg.Kafka.Topic.Prefix, rel.Namespace, rel.RelationName)
-	value, err := json.Marshal(Event{
-		Source: struct {
-			Table string `json:"table"`
-			LSN   string `json:"lsn"`
-		}{
-			Table: rel.Namespace + "." + rel.RelationName,
-			LSN:   lsn.String(),
-		},
-		After: after,
-		TsMs:  time.Now().UnixMilli(),
-	})
+	value, err := json.Marshal(data)
 	if err != nil {
-		return errors.Wrap(err, "marshal event")
+		return errors.Wrap(err, "marshal event data")
 	}
 	offset, part, err := s.prod.SendMessage(&sarama.ProducerMessage{
 		Topic: topic,
 		Key:   key,
 		Value: sarama.ByteEncoder(value),
+		Headers: []sarama.RecordHeader{
+			{
+				Key:   []byte("lsn"),
+				Value: []byte(lsn.String()),
+			},
+			{
+				Key:   []byte("ts_ms"),
+				Value: []byte(strconv.FormatInt(time.Now().UnixMilli(), 10)),
+			},
+		},
 	})
 	if err != nil {
 		return errors.Wrap(err, "send to Kafka")
@@ -377,9 +369,9 @@ func (s *Source) writeEvent(relationID uint32, cols []*pglogrepl.TupleDataColumn
 
 func (s *Source) lsnHook() zerolog.HookFunc {
 	return func(e *zerolog.Event, _ zerolog.Level, _ string) {
-		if s.xLogPos == 0 {
+		if s.lsn == 0 {
 			return
 		}
-		e.Stringer("lsn", s.xLogPos)
+		e.Stringer("lsn", s.lsn)
 	}
 }
