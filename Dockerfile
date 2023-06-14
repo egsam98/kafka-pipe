@@ -11,4 +11,4 @@ RUN CGO_ENABLED=0 go build -o kafka-pipe cmd/app/main.go
 FROM alpine
 WORKDIR /app
 COPY --from=BUILDER /app/kafka-pipe /app
-ENTRYPOINT ["/app/kafka-pipe"]
+CMD ["/app/kafka-pipe", "config.yaml"]
