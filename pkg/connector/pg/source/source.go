@@ -326,7 +326,7 @@ func (s *Source) writeEvent(relationID uint32, cols []*pglogrepl.TupleDataColumn
 			}
 			var err error
 			if value, err = typ.Codec.DecodeValue(s.typeMap, oid, format, col.Data); err != nil {
-				return errors.Errorf("decode %q (OID=%d, format=%d)", string(col.Data), oid, format)
+				return errors.Wrapf(err, "decode %q (OID=%d, format=%d)", string(col.Data), oid, format)
 			}
 		}
 
@@ -340,6 +340,7 @@ func (s *Source) writeEvent(relationID uint32, cols []*pglogrepl.TupleDataColumn
 	if err != nil {
 		return errors.Wrap(err, "marshal event data")
 	}
+
 	offset, part, err := s.prod.SendMessage(&sarama.ProducerMessage{
 		Topic: topic,
 		Key:   key,

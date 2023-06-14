@@ -28,4 +28,9 @@ func RegisterTypes(typeMap *pgtype.Map) {
 		Name:  "numeric",
 		OID:   pgtype.NumericOID,
 	})
+	typeMap.RegisterType(&pgtype.Type{
+		Codec: TimestampCodec{},
+		Name:  "timestamp",
+		OID:   pgtype.TimestampOID,
+	})
 }
