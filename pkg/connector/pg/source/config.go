@@ -15,6 +15,10 @@ type Config struct {
 		Publication string   `yaml:"publication"`
 		Slot        string   `yaml:"slot"`
 		Tables      []string `yaml:"tables"`
+		Health      struct {
+			Table    string        `yaml:"table"`
+			Interval time.Duration `yaml:"interval"`
+		} `yaml:"health"`
 	} `yaml:"pg"`
 	Kafka struct {
 		Brokers []string `yaml:"brokers"`
@@ -26,7 +30,6 @@ type Config struct {
 			CompressionType   string `yaml:"compression.type"`
 		} `yaml:"topic"`
 	} `yaml:"kafka"`
-	HealthInterval time.Duration `yaml:"health.interval"`
 }
 
 func (c *Config) Parse(src []byte) error {
@@ -70,8 +73,11 @@ func (c *Config) Parse(src []byte) error {
 	if c.Kafka.Topic.CleanupPolicy == "" {
 		c.Kafka.Topic.CleanupPolicy = "delete"
 	}
-	if c.HealthInterval == 0 {
-		c.HealthInterval = 10 * time.Second
+	if c.Pg.Health.Table == "" {
+		c.Pg.Health.Table = "public.pipe_health"
+	}
+	if c.Pg.Health.Interval == 0 {
+		c.Pg.Health.Interval = 10 * time.Second
 	}
 	return nil
 }

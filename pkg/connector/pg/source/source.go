@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -31,6 +32,7 @@ type Source struct {
 	storage   warden.Storage
 	prod      sarama.SyncProducer
 	db        *pgconn.PgConn
+	dbPool    *pgxpool.Pool
 	relations map[uint32]*pglogrepl.RelationMessage
 	typeMap   *pgtype.Map
 	lsn       pglogrepl.LSN
@@ -93,6 +95,9 @@ func (s *Source) Run(ctx context.Context) error {
 	if s.prod, err = sarama.NewSyncProducer(s.cfg.Kafka.Brokers, sarCfg); err != nil {
 		return errors.Wrap(err, "init Kafka producer")
 	}
+	if s.dbPool, err = pgxpool.New(ctx, s.cfg.Pg.Url); err != nil {
+		return errors.Wrap(err, "connect to PostgreSQL")
+	}
 
 	if err := s.startReplication(ctx); err != nil {
 		return err
@@ -108,6 +113,7 @@ func (s *Source) Run(ctx context.Context) error {
 
 	s.log.Info().Msg("PostgreSQL: Close")
 	s.db.Close(context.Background())
+	s.dbPool.Close()
 	s.log.Info().Msg("Kafka: Close producer")
 	s.prod.Close()
 	return nil
@@ -125,15 +131,23 @@ func (s *Source) startReplication(ctx context.Context) error {
 		return errors.Wrap(err, "check connection")
 	}
 
+	// Create health check table
+	sql := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (id int primary key, timestamp timestamp)`, s.cfg.Pg.Health.Table)
+	if _, err := s.dbPool.Exec(ctx, sql); err != nil {
+		return errors.Wrap(err, sql)
+	}
+	s.log.Info().Msg("PostgreSQL: " + sql)
+
 	// Create/edit publication
-	sql := fmt.Sprintf("CREATE PUBLICATION %s FOR TABLE %s", s.cfg.Pg.Publication, strings.Join(s.cfg.Pg.Tables, ", "))
-	switch _, err := s.db.Exec(ctx, sql).ReadAll(); {
+	tables := strings.Join(append(s.cfg.Pg.Tables, s.cfg.Pg.Health.Table), ", ")
+	sql = fmt.Sprintf("CREATE PUBLICATION %s FOR TABLE %s", s.cfg.Pg.Publication, tables)
+	switch _, err := s.dbPool.Exec(ctx, sql); {
 	case err == nil:
 		s.log.Info().Msg("PostgreSQL: " + sql)
 	case pg.Is(err, pg.DuplicateObject):
-		sql := fmt.Sprintf("ALTER PUBLICATION %s SET TABLE %s", s.cfg.Pg.Publication, strings.Join(s.cfg.Pg.Tables, ", "))
+		sql := fmt.Sprintf("ALTER PUBLICATION %s SET TABLE %s", s.cfg.Pg.Publication, tables)
 		s.log.Info().Msg("PostgreSQL: " + sql)
-		if _, err := s.db.Exec(ctx, sql).ReadAll(); err != nil {
+		if _, err := s.dbPool.Exec(ctx, sql); err != nil {
 			return errors.Wrap(err, sql)
 		}
 	default:
@@ -188,7 +202,7 @@ func (s *Source) health(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(s.cfg.HealthInterval):
+		case <-time.After(s.cfg.Pg.Health.Interval):
 			if s.db.IsClosed() {
 				continue
 			}
@@ -197,7 +211,15 @@ func (s *Source) health(ctx context.Context) {
 				s.log.Err(err).Msg("PostgreSQL: SendStandbyStatusUpdate")
 				continue
 			}
-			s.log.Debug().Msgf("PostgreSQL: Sent Standby status message")
+
+			sql := fmt.Sprintf("INSERT INTO %s (id, timestamp) VALUES (0, now()) ON CONFLICT (id) DO UPDATE SET "+
+				"timestamp = now()", s.cfg.Pg.Health.Table)
+			if _, err := s.dbPool.Exec(ctx, sql); err != nil {
+				s.log.Err(err).Msgf("PostgreSQL: Health check to %q table", s.cfg.Pg.Health.Table)
+				continue
+			}
+
+			s.log.Debug().Msgf("PostgreSQL: Health check")
 		}
 	}
 }
@@ -267,7 +289,7 @@ func (s *Source) handleMessage(msg pgproto3.BackendMessage) error {
 		return errors.Wrap(err, "parse WAL data")
 	}
 
-	s.log.Info().
+	s.log.Debug().
 		Time("server_time", xld.ServerTime).
 		Stringer("wal_start", xld.WALStart).
 		Stringer("wal_end", xld.ServerWALEnd).
@@ -301,6 +323,11 @@ func (s *Source) writeEvent(relationID uint32, cols []*pglogrepl.TupleDataColumn
 	rel, ok := s.relations[relationID]
 	if !ok {
 		return errors.Errorf("unknown relation ID=%d", relationID)
+	}
+
+	// Skip health check table
+	if rel.Namespace+"."+rel.RelationName == s.cfg.Pg.Health.Table {
+		return nil
 	}
 
 	// Decode columns tuple into Go map
