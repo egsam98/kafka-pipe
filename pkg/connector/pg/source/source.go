@@ -31,8 +31,8 @@ type Source struct {
 	wg        sync.WaitGroup
 	storage   warden.Storage
 	prod      sarama.SyncProducer
-	db        *pgconn.PgConn
-	dbPool    *pgxpool.Pool
+	replConn  *pgconn.PgConn
+	db        *pgxpool.Pool
 	relations map[uint32]*pglogrepl.RelationMessage
 	typeMap   *pgtype.Map
 	lsn       pglogrepl.LSN
@@ -95,7 +95,7 @@ func (s *Source) Run(ctx context.Context) error {
 	if s.prod, err = sarama.NewSyncProducer(s.cfg.Kafka.Brokers, sarCfg); err != nil {
 		return errors.Wrap(err, "init Kafka producer")
 	}
-	if s.dbPool, err = pgxpool.New(ctx, s.cfg.Pg.Url); err != nil {
+	if s.db, err = pgxpool.New(ctx, s.cfg.Pg.Url); err != nil {
 		return errors.Wrap(err, "connect to PostgreSQL")
 	}
 
@@ -112,11 +112,12 @@ func (s *Source) Run(ctx context.Context) error {
 	s.wg.Wait()
 
 	s.log.Info().Msg("PostgreSQL: Close")
-	s.db.Close(context.Background())
-	s.dbPool.Close()
+	if err := s.replConn.Close(context.Background()); err != nil {
+		return err
+	}
+	s.db.Close()
 	s.log.Info().Msg("Kafka: Close producer")
-	s.prod.Close()
-	return nil
+	return s.prod.Close()
 }
 
 func (s *Source) startReplication(ctx context.Context) error {
@@ -126,14 +127,14 @@ func (s *Source) startReplication(ctx context.Context) error {
 	if err != nil {
 		return errors.Wrap(err, "connect to PostgreSQL server")
 	}
-	s.db = db
-	if err := s.db.CheckConn(); err != nil {
+	s.replConn = db
+	if err := s.replConn.CheckConn(); err != nil {
 		return errors.Wrap(err, "check connection")
 	}
 
 	// Create health check table
 	sql := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (id int primary key, timestamp timestamp)`, s.cfg.Pg.Health.Table)
-	if _, err := s.dbPool.Exec(ctx, sql); err != nil {
+	if _, err := s.db.Exec(ctx, sql); err != nil {
 		return errors.Wrap(err, sql)
 	}
 	s.log.Info().Msg("PostgreSQL: " + sql)
@@ -141,29 +142,23 @@ func (s *Source) startReplication(ctx context.Context) error {
 	// Create/edit publication
 	tables := strings.Join(append(s.cfg.Pg.Tables, s.cfg.Pg.Health.Table), ", ")
 	sql = fmt.Sprintf("CREATE PUBLICATION %s FOR TABLE %s", s.cfg.Pg.Publication, tables)
-	switch _, err := s.dbPool.Exec(ctx, sql); {
+	switch _, err := s.db.Exec(ctx, sql); {
 	case err == nil:
 		s.log.Info().Msg("PostgreSQL: " + sql)
 	case pg.Is(err, pg.DuplicateObject):
 		sql := fmt.Sprintf("ALTER PUBLICATION %s SET TABLE %s", s.cfg.Pg.Publication, tables)
 		s.log.Info().Msg("PostgreSQL: " + sql)
-		if _, err := s.dbPool.Exec(ctx, sql); err != nil {
+		if _, err := s.db.Exec(ctx, sql); err != nil {
 			return errors.Wrap(err, sql)
 		}
 	default:
 		return errors.Wrap(err, sql)
 	}
 
-	sysIdent, err := pglogrepl.IdentifySystem(ctx, s.db)
-	if err != nil {
-		return errors.Wrap(err, "identify system")
-	}
-	s.log.Info().Msgf("PostgreSQL: SystemID: %s, Timeline: %d, XLogPos: %s, DBName: %s", sysIdent.SystemID, sysIdent.Timeline, sysIdent.XLogPos, sysIdent.DBName)
-
 	// Create replication slot if not exists
 	switch _, err := pglogrepl.CreateReplicationSlot(
 		ctx,
-		s.db,
+		s.replConn,
 		s.cfg.Pg.Slot,
 		Plugin,
 		pglogrepl.CreateReplicationSlotOptions{Mode: pglogrepl.LogicalReplication},
@@ -184,7 +179,7 @@ func (s *Source) startReplication(ctx context.Context) error {
 
 	// Start replication
 	s.log.Info().Msgf("PostgreSQL: Start logical replication")
-	err = pglogrepl.StartReplication(ctx, s.db, s.cfg.Pg.Slot, s.lsn, pglogrepl.StartReplicationOptions{
+	err = pglogrepl.StartReplication(ctx, s.replConn, s.cfg.Pg.Slot, s.lsn, pglogrepl.StartReplicationOptions{
 		PluginArgs: []string{
 			"proto_version '1'",
 			fmt.Sprintf("publication_names '%s'", s.cfg.Pg.Publication),
@@ -203,10 +198,10 @@ func (s *Source) health(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-time.After(s.cfg.Pg.Health.Interval):
-			if s.db.IsClosed() {
+			if s.replConn.IsClosed() {
 				continue
 			}
-			err := pglogrepl.SendStandbyStatusUpdate(ctx, s.db, pglogrepl.StandbyStatusUpdate{WALWritePosition: s.lsn})
+			err := pglogrepl.SendStandbyStatusUpdate(ctx, s.replConn, pglogrepl.StandbyStatusUpdate{WALWritePosition: s.lsn})
 			if err != nil {
 				s.log.Err(err).Msg("PostgreSQL: SendStandbyStatusUpdate")
 				continue
@@ -214,7 +209,7 @@ func (s *Source) health(ctx context.Context) {
 
 			sql := fmt.Sprintf("INSERT INTO %s (id, timestamp) VALUES (0, now()) ON CONFLICT (id) DO UPDATE SET "+
 				"timestamp = now()", s.cfg.Pg.Health.Table)
-			if _, err := s.dbPool.Exec(ctx, sql); err != nil {
+			if _, err := s.db.Exec(ctx, sql); err != nil {
 				s.log.Err(err).Msgf("PostgreSQL: Health check to %q table", s.cfg.Pg.Health.Table)
 				continue
 			}
@@ -228,7 +223,7 @@ func (s *Source) listenMessages(ctx context.Context) {
 	defer s.wg.Done()
 MainLoop:
 	for {
-		msg, err := s.db.ReceiveMessage(ctx)
+		msg, err := s.replConn.ReceiveMessage(ctx)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return
