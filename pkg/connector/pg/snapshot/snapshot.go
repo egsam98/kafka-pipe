@@ -67,19 +67,20 @@ func (s *Snapshot) Run(ctx context.Context) error {
 	defer s.db.Close()
 
 	for _, table := range s.cfg.Pg.Tables {
-		select {
-		case <-ctx.Done():
-			break
-		default:
-			if err := s.run(ctx, table); err != nil {
-				return err
-			}
+		if err := s.run(ctx, table); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
 func (s *Snapshot) run(ctx context.Context, table string) error {
+	select {
+	case <-ctx.Done():
+		return nil
+	default:
+	}
+
 	// Create topic if not exists
 	topic := s.cfg.Kafka.Topic.Prefix + "." + table
 	if err := s.sarAdmin.CreateTopic(topic, &sarama.TopicDetail{
