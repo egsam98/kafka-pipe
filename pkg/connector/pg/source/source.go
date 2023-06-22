@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Shopify/sarama"
 	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"
@@ -18,6 +17,9 @@ import (
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kgo"
 
 	"kafka-pipe/pkg/connector"
 	"kafka-pipe/pkg/connector/pg"
@@ -30,13 +32,20 @@ type Source struct {
 	cfg       Config
 	wg        sync.WaitGroup
 	storage   warden.Storage
-	prod      sarama.SyncProducer
+	kafka     *kgo.Client
 	replConn  *pgconn.PgConn
 	db        *pgxpool.Pool
 	relations map[uint32]*pglogrepl.RelationMessage
 	typeMap   *pgtype.Map
 	lsn       pglogrepl.LSN
+	events    chan Event
 	log       zerolog.Logger
+}
+
+type Event struct {
+	Start, End pglogrepl.LSN
+	Table      string
+	Data       map[string]any
 }
 
 func NewSource(config connector.Config) (*Source, error) {
@@ -50,6 +59,7 @@ func NewSource(config connector.Config) (*Source, error) {
 		storage:   config.Storage,
 		relations: make(map[uint32]*pglogrepl.RelationMessage),
 		typeMap:   pgtype.NewMap(),
+		events:    make(chan Event),
 	}
 	pg.RegisterTypes(s.typeMap)
 	s.log = log.Logger.
@@ -60,41 +70,31 @@ func NewSource(config connector.Config) (*Source, error) {
 }
 
 func (s *Source) Run(ctx context.Context) error {
-	sarAdmin, err := sarama.NewClusterAdmin(s.cfg.Kafka.Brokers, nil)
-	if err != nil {
-		return errors.Wrap(err, "init Kafka admin")
+	// Init Kafka client
+	var err error
+	if s.kafka, err = kgo.NewClient(
+		kgo.SeedBrokers(s.cfg.Kafka.Brokers...),
+		kgo.ProducerBatchCompression(kgo.Lz4Compression()),
+	); err != nil {
+		return errors.Wrap(err, "init Kafka client")
 	}
+	if err := s.kafka.Ping(ctx); err != nil {
+		return errors.Wrap(err, "ping Kafka client")
+	}
+
+	kafkaAdmin := kadm.NewClient(s.kafka)
 	// Create topics if not exists
 	for _, table := range s.cfg.Pg.Tables {
 		topic := s.cfg.Kafka.Topic.Prefix + "." + table
-		if err := sarAdmin.CreateTopic(topic, &sarama.TopicDetail{
-			NumPartitions:     s.cfg.Kafka.Topic.Partitions,
-			ReplicationFactor: s.cfg.Kafka.Topic.ReplicationFactor,
-			ConfigEntries: map[string]*string{
-				"compression.type": &s.cfg.Kafka.Topic.CompressionType,
-				"cleanup.policy":   &s.cfg.Kafka.Topic.CleanupPolicy,
-			},
-		}, false); err != nil {
-			if !errors.Is(err, sarama.ErrTopicAlreadyExists) {
-				return errors.Wrapf(err, "create topic %q", topic)
-			}
+		res, err := kafkaAdmin.CreateTopic(ctx, s.cfg.Kafka.Topic.Partitions, s.cfg.Kafka.Topic.ReplicationFactor, map[string]*string{
+			"compression.type": &s.cfg.Kafka.Topic.CompressionType,
+			"cleanup.policy":   &s.cfg.Kafka.Topic.CleanupPolicy,
+		}, topic)
+		if err != nil && !errors.Is(res.Err, kerr.TopicAlreadyExists) {
+			return errors.Wrapf(err, "create topic %q", topic)
 		}
 	}
-	sarAdmin.Close()
 
-	// Init Kafka producer
-	sarCfg := sarama.NewConfig()
-	sarCfg.Net.MaxOpenRequests = 1
-	sarCfg.Producer.Idempotent = true
-	sarCfg.Producer.RequiredAcks = sarama.WaitForAll
-	sarCfg.Producer.Compression = sarama.CompressionLZ4
-	sarCfg.Producer.Return.Successes = true
-	sarCfg.Producer.Retry.Max = 10
-	sarCfg.Producer.Retry.Backoff = 100 * time.Millisecond
-	sarCfg.Metadata.AllowAutoTopicCreation = false
-	if s.prod, err = sarama.NewSyncProducer(s.cfg.Kafka.Brokers, sarCfg); err != nil {
-		return errors.Wrap(err, "init Kafka producer")
-	}
 	if s.db, err = pgxpool.New(ctx, s.cfg.Pg.Url); err != nil {
 		return errors.Wrap(err, "connect to PostgreSQL")
 	}
@@ -103,21 +103,23 @@ func (s *Source) Run(ctx context.Context) error {
 		return err
 	}
 
-	s.wg.Add(2)
-	go s.health(ctx)
-	go s.listenMessages(ctx)
+	s.wg.Add(3)
+	go s.healthPg(ctx)
+	go s.listenPgRepl(ctx)
+	go s.healthKafka(ctx)
+
+	if err := s.produceEvents(ctx); err != nil {
+		return err
+	}
 
 	// Shutdown
-	<-ctx.Done()
 	s.wg.Wait()
 
 	s.log.Info().Msg("PostgreSQL: Close")
-	if err := s.replConn.Close(context.Background()); err != nil {
-		return err
-	}
 	s.db.Close()
 	s.log.Info().Msg("Kafka: Close producer")
-	return s.prod.Close()
+	s.kafka.Close()
+	return nil
 }
 
 func (s *Source) startReplication(ctx context.Context) error {
@@ -190,7 +192,22 @@ func (s *Source) startReplication(ctx context.Context) error {
 	return errors.Wrap(err, "start logical replication")
 }
 
-func (s *Source) health(ctx context.Context) {
+func (s *Source) healthKafka(ctx context.Context) {
+	defer s.wg.Done()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(10 * time.Second):
+			if err := s.kafka.Ping(ctx); err != nil {
+				s.log.Err(err).Msgf("Kafka: Health check")
+			}
+		}
+	}
+}
+
+func (s *Source) healthPg(ctx context.Context) {
 	defer s.wg.Done()
 
 	for {
@@ -211,50 +228,32 @@ func (s *Source) health(ctx context.Context) {
 				"timestamp = now()", s.cfg.Pg.Health.Table)
 			if _, err := s.db.Exec(ctx, sql); err != nil {
 				s.log.Err(err).Msgf("PostgreSQL: Health check to %q table", s.cfg.Pg.Health.Table)
-				continue
 			}
-
-			s.log.Debug().Msgf("PostgreSQL: Health check")
 		}
 	}
 }
 
-func (s *Source) listenMessages(ctx context.Context) {
+func (s *Source) listenPgRepl(ctx context.Context) {
 	defer s.wg.Done()
-MainLoop:
+
 	for {
-		msg, err := s.replConn.ReceiveMessage(ctx)
-		if err != nil {
-			if errors.Is(err, context.Canceled) {
-				return
-			}
-			if pgconn.Timeout(err) {
-				continue
-			}
-			s.log.Error().Stack().Err(err).Msg("Receive message")
-
-			for {
-				err := s.startReplication(ctx)
-				if err == nil {
-					continue MainLoop
-				}
-				s.log.Error().Stack().Err(err).Msg("Start replication")
-
-				select {
-				case <-time.After(5 * time.Second):
-				case <-ctx.Done():
-					return
-				}
-			}
+		err := s.recvEvent(ctx)
+		if err == nil {
+			continue
 		}
 
+		_ = s.replConn.Close(ctx)
+		if errors.Is(err, context.Canceled) {
+			return
+		}
+		s.log.Error().Stack().Err(err).Msgf("PostgreSQL: Handle message")
+
 		for {
-			err := s.handleMessage(msg)
+			err := s.startReplication(ctx)
 			if err == nil {
 				break
 			}
-			s.log.Error().Stack().Err(err).Msg("Handle message")
-
+			s.log.Error().Stack().Err(err).Msg("PostgreSQL: Start replication")
 			select {
 			case <-time.After(5 * time.Second):
 			case <-ctx.Done():
@@ -264,7 +263,15 @@ MainLoop:
 	}
 }
 
-func (s *Source) handleMessage(msg pgproto3.BackendMessage) error {
+func (s *Source) recvEvent(ctx context.Context) error {
+	msg, err := s.replConn.ReceiveMessage(ctx)
+	if err != nil {
+		if pgconn.Timeout(err) {
+			return nil
+		}
+		return errors.Wrap(err, "receive message")
+	}
+
 	if errMsg, ok := msg.(*pgproto3.ErrorResponse); ok {
 		return errors.Errorf("Postgres WAL error: %+v", errMsg)
 	}
@@ -279,7 +286,7 @@ func (s *Source) handleMessage(msg pgproto3.BackendMessage) error {
 		return errors.Wrap(err, "parse XLogData")
 	}
 
-	data, err := pglogrepl.Parse(xld.WALData)
+	xldData, err := pglogrepl.Parse(xld.WALData)
 	if err != nil {
 		return errors.Wrap(err, "parse WAL data")
 	}
@@ -288,41 +295,47 @@ func (s *Source) handleMessage(msg pgproto3.BackendMessage) error {
 		Time("server_time", xld.ServerTime).
 		Stringer("wal_start", xld.WALStart).
 		Stringer("wal_end", xld.ServerWALEnd).
-		Msgf("PostgreSQL: Received message %T", data)
+		Msgf("PostgreSQL: Received message %T", xldData)
 
-	switch data := data.(type) {
+	var (
+		data  map[string]any
+		table string
+	)
+	switch xldData := xldData.(type) {
 	case *pglogrepl.RelationMessage:
-		s.relations[data.RelationID] = data
+		s.relations[xldData.RelationID] = xldData
 	case *pglogrepl.InsertMessage:
-		err = s.writeEvent(data.RelationID, data.Tuple.Columns, xld.WALStart)
+		table, data, err = s.newEventData(xldData.RelationID, xldData.Tuple.Columns)
 	case *pglogrepl.UpdateMessage:
-		err = s.writeEvent(data.RelationID, data.NewTuple.Columns, xld.WALStart)
+		table, data, err = s.newEventData(xldData.RelationID, xldData.NewTuple.Columns)
 	case *pglogrepl.DeleteMessage:
 		if !s.cfg.Pg.SkipDelete {
-			err = s.writeEvent(data.RelationID, data.OldTuple.Columns, xld.WALStart)
+			table, data, err = s.newEventData(xldData.RelationID, xldData.OldTuple.Columns)
 		}
 	}
 	if err != nil {
 		return err
 	}
 
-	xLogPos := xld.WALStart + pglogrepl.LSN(len(xld.WALData))
-	if err := s.storage.Set("lsn", xLogPos); err != nil {
-		return err
+	s.events <- Event{
+		Start: xld.WALStart,
+		End:   xld.WALStart + pglogrepl.LSN(len(xld.WALData)),
+		Table: table,
+		Data:  data,
 	}
-	s.lsn = xLogPos
 	return nil
 }
 
-func (s *Source) writeEvent(relationID uint32, cols []*pglogrepl.TupleDataColumn, lsn pglogrepl.LSN) error {
+func (s *Source) newEventData(relationID uint32, cols []*pglogrepl.TupleDataColumn) (string, map[string]any, error) {
 	rel, ok := s.relations[relationID]
 	if !ok {
-		return errors.Errorf("unknown relation ID=%d", relationID)
+		return "", nil, errors.Errorf("unknown relation ID=%d", relationID)
 	}
 
+	table := rel.Namespace + "." + rel.RelationName
 	// Skip health check table
-	if rel.Namespace+"."+rel.RelationName == s.cfg.Pg.Health.Table {
-		return nil
+	if table == s.cfg.Pg.Health.Table {
+		return "", nil, nil
 	}
 
 	// Decode columns tuple into Go map
@@ -348,51 +361,79 @@ func (s *Source) writeEvent(relationID uint32, cols []*pglogrepl.TupleDataColumn
 			}
 			var err error
 			if value, err = typ.Codec.DecodeValue(s.typeMap, oid, format, col.Data); err != nil {
-				return errors.Wrapf(err, "decode %q (OID=%d, format=%d)", string(col.Data), oid, format)
+				return "", nil, errors.Wrapf(err, "decode %q (OID=%d, format=%d)", string(col.Data), oid, format)
 			}
 		}
 
 		data[rel.Columns[i].Name] = value
 	}
+	return table, data, nil
+}
 
-	table := rel.Namespace + "." + rel.RelationName
-	topic := s.cfg.Kafka.Topic.Prefix + "." + table
-	key := sarama.StringEncoder(fmt.Sprintf(`{"id": %q}`, data["id"]))
-	value, err := json.Marshal(data)
-	if err != nil {
-		return errors.Wrap(err, "marshal event data")
+func (s *Source) produceEvents(ctx context.Context) error {
+	batch := make([]*kgo.Record, 0, s.cfg.Kafka.Batch.Size)
+	var latestLSN pglogrepl.LSN
+	ticker := time.NewTicker(s.cfg.Kafka.Batch.Timeout)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		case event := <-s.events:
+			latestLSN = event.End
+			if event.Data == nil {
+				continue
+			}
+
+			value, err := json.Marshal(event.Data)
+			if err != nil {
+				return errors.Wrapf(err, "marshal event data: %+v", event.Data)
+			}
+
+			batch = append(batch, &kgo.Record{
+				Topic: s.cfg.Kafka.Topic.Prefix + "." + event.Table,
+				Key:   []byte(fmt.Sprintf(`{"id": %q}`, event.Data["id"])),
+				Value: value,
+				Headers: []kgo.RecordHeader{
+					{
+						Key:   "lsn",
+						Value: []byte(event.Start.String()),
+					},
+					{
+						Key:   "ts_ms",
+						Value: []byte(strconv.FormatInt(time.Now().UnixMilli(), 10)),
+					},
+					{
+						Key:   "table",
+						Value: []byte(event.Table),
+					},
+				},
+			})
+
+			if len(batch) < s.cfg.Kafka.Batch.Size {
+				continue
+			}
+		}
+
+		if len(batch) > 0 {
+			// Block until all messages are delivered to brokers
+			if err := s.kafka.ProduceSync(context.Background(), batch...).FirstErr(); err != nil {
+				return errors.Wrap(err, "produce to Kafka")
+			}
+			s.log.Info().Int("count", len(batch)).Msg("Kafka: Events have been published")
+			batch = make([]*kgo.Record, 0, s.cfg.Kafka.Batch.Size)
+		}
+
+		if latestLSN != 0 {
+			if err := s.storage.Set("lsn", latestLSN); err != nil {
+				return err
+			}
+			s.lsn = latestLSN
+			latestLSN = 0
+		}
 	}
-
-	offset, part, err := s.prod.SendMessage(&sarama.ProducerMessage{
-		Topic: topic,
-		Key:   key,
-		Value: sarama.ByteEncoder(value),
-		Headers: []sarama.RecordHeader{
-			{
-				Key:   []byte("lsn"),
-				Value: []byte(lsn.String()),
-			},
-			{
-				Key:   []byte("ts_ms"),
-				Value: []byte(strconv.FormatInt(time.Now().UnixMilli(), 10)),
-			},
-			{
-				Key:   []byte("table"),
-				Value: []byte(table),
-			},
-		},
-	})
-	if err != nil {
-		return errors.Wrap(err, "send to Kafka")
-	}
-
-	s.log.Info().
-		Int32("offset", offset).
-		Int64("partition", part).
-		Str("topic", topic).
-		Str("message.key", string(key)).
-		Msg("Kafka: Event has been published")
-	return nil
 }
 
 func (s *Source) lsnHook() zerolog.HookFunc {

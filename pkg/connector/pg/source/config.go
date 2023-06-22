@@ -29,6 +29,10 @@ type Config struct {
 			CleanupPolicy     string `yaml:"cleanup.policy"`
 			CompressionType   string `yaml:"compression.type"`
 		} `yaml:"topic"`
+		Batch struct {
+			Size    int           `yaml:"size"`
+			Timeout time.Duration `yaml:"timeout"`
+		} `yaml:"batch"`
 	} `yaml:"kafka"`
 }
 
@@ -55,6 +59,13 @@ func (c *Config) Parse(src []byte) error {
 	if len(c.Pg.Tables) == 0 {
 		return errors.New(`"pg.tables" list is required`)
 	}
+	if c.Pg.Health.Table == "" {
+		c.Pg.Health.Table = "public.pipe_health"
+	}
+	if c.Pg.Health.Interval == 0 {
+		c.Pg.Health.Interval = 10 * time.Second
+	}
+
 	if len(c.Kafka.Brokers) == 0 {
 		return errors.New(`"kafka.brokers" list is required`)
 	}
@@ -73,11 +84,11 @@ func (c *Config) Parse(src []byte) error {
 	if c.Kafka.Topic.CleanupPolicy == "" {
 		c.Kafka.Topic.CleanupPolicy = "delete"
 	}
-	if c.Pg.Health.Table == "" {
-		c.Pg.Health.Table = "public.pipe_health"
+	if c.Kafka.Batch.Size == 0 {
+		c.Kafka.Batch.Size = 10000
 	}
-	if c.Pg.Health.Interval == 0 {
-		c.Pg.Health.Interval = 10 * time.Second
+	if c.Kafka.Batch.Timeout == 0 {
+		c.Kafka.Batch.Timeout = 5 * time.Second
 	}
 	return nil
 }
