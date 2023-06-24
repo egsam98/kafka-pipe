@@ -108,7 +108,7 @@ func (s *Source) Run(ctx context.Context) error {
 	go s.listenPgRepl(ctx)
 	go s.healthKafka(ctx)
 
-	if err := s.produceEvents(ctx); err != nil {
+	if err := s.produceEvents(); err != nil {
 		return err
 	}
 
@@ -235,6 +235,7 @@ func (s *Source) healthPg(ctx context.Context) {
 
 func (s *Source) listenPgRepl(ctx context.Context) {
 	defer s.wg.Done()
+	defer close(s.events)
 
 	for {
 		err := s.recvEvent(ctx)
@@ -317,13 +318,17 @@ func (s *Source) recvEvent(ctx context.Context) error {
 		return err
 	}
 
-	s.events <- Event{
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case s.events <- Event{
 		Start: xld.WALStart,
 		End:   xld.WALStart + pglogrepl.LSN(len(xld.WALData)),
 		Table: table,
 		Data:  data,
+	}:
+		return nil
 	}
-	return nil
 }
 
 func (s *Source) newEventData(relationID uint32, cols []*pglogrepl.TupleDataColumn) (string, map[string]any, error) {
@@ -370,7 +375,7 @@ func (s *Source) newEventData(relationID uint32, cols []*pglogrepl.TupleDataColu
 	return table, data, nil
 }
 
-func (s *Source) produceEvents(ctx context.Context) error {
+func (s *Source) produceEvents() error {
 	batch := make([]*kgo.Record, 0, s.cfg.Kafka.Batch.Size)
 	var latestLSN pglogrepl.LSN
 	ticker := time.NewTicker(s.cfg.Kafka.Batch.Timeout)
@@ -378,10 +383,11 @@ func (s *Source) produceEvents(ctx context.Context) error {
 
 	for {
 		select {
-		case <-ctx.Done():
-			return nil
 		case <-ticker.C:
-		case event := <-s.events:
+		case event, ok := <-s.events:
+			if !ok {
+				return nil
+			}
 			latestLSN = event.End
 			if event.Data == nil {
 				continue
