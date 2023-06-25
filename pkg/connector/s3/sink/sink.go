@@ -80,6 +80,43 @@ func (s *Sink) Run(ctx context.Context) error {
 	return nil
 }
 
+func (s *Sink) poll(ctx context.Context) (map[string]chan *kgo.Record, error) {
+	records := make(map[string]chan *kgo.Record)
+	for _, topic := range s.cfg.Kafka.Topics {
+		records[topic] = make(chan *kgo.Record)
+	}
+
+	log.Info().Msgf("Kafka: Listening to %v", s.cfg.Kafka.Topics)
+
+	go func() {
+		defer func() {
+			for _, records := range records {
+				close(records)
+			}
+		}()
+
+		for {
+			pollCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			fes := s.kafka.PollFetches(pollCtx)
+			cancel()
+			if err := fes.Err(); err != nil {
+				if errors.Is(err, context.Canceled) {
+					return
+				}
+				if !errors.Is(err, context.DeadlineExceeded) {
+					log.Err(err).Msgf("Kafka: Poll fetches")
+				}
+			}
+
+			fes.EachRecord(func(rec *kgo.Record) {
+				records[rec.Topic] <- rec
+			})
+		}
+	}()
+
+	return records, nil
+}
+
 func (s *Sink) listenRecords(ctx context.Context, records <-chan *kgo.Record) {
 	defer s.wg.Done()
 
@@ -142,43 +179,6 @@ func (s *Sink) listenRecords(ctx context.Context, records <-chan *kgo.Record) {
 
 		overflowKey = ""
 	}
-}
-
-func (s *Sink) poll(ctx context.Context) (map[string]chan *kgo.Record, error) {
-	records := make(map[string]chan *kgo.Record)
-	for _, topic := range s.cfg.Kafka.Topics {
-		records[topic] = make(chan *kgo.Record)
-	}
-
-	log.Info().Msgf("Kafka: Listening to %v", s.cfg.Kafka.Topics)
-
-	go func() {
-		defer func() {
-			for _, records := range records {
-				close(records)
-			}
-		}()
-
-		for {
-			pollCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-			fes := s.kafka.PollFetches(pollCtx)
-			cancel()
-			if err := fes.Err(); err != nil {
-				if errors.Is(err, context.Canceled) {
-					return
-				}
-				if !errors.Is(err, context.DeadlineExceeded) {
-					log.Err(err).Msgf("Kafka: Poll fetches")
-				}
-			}
-
-			fes.EachRecord(func(rec *kgo.Record) {
-				records[rec.Topic] <- rec
-			})
-		}
-	}()
-
-	return records, nil
 }
 
 func (s *Sink) uploadToS3(filename string, records []*kgo.Record) error {

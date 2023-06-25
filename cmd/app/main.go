@@ -7,6 +7,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/dgraph-io/badger/v4"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -14,12 +15,14 @@ import (
 	"golang.org/x/sync/errgroup"
 	"gopkg.in/yaml.v3"
 
+	"kafka-pipe/pkg/badgerx"
 	"kafka-pipe/pkg/connector"
 	_ "kafka-pipe/pkg/connector/pg/snapshot"
 	_ "kafka-pipe/pkg/connector/pg/source"
 	_ "kafka-pipe/pkg/connector/s3/sink"
-	"kafka-pipe/pkg/warden/storage/badger"
 )
+
+const DataFolder = "data"
 
 func main() {
 	zerolog.ErrorStackMarshaler = pkgerrors.MarshalStack
@@ -71,15 +74,17 @@ func run() error {
 		return err
 	}
 
-	storage := badger.NewBadger(cfg.Connector.Name)
-	if err := storage.Open(); err != nil {
-		return err
+	stor, err := badger.Open(badger.
+		DefaultOptions(DataFolder).
+		WithLogger(new(badgerx.Logger)))
+	if err != nil {
+		return errors.Wrapf(err, "open Badger %q", DataFolder)
 	}
 
 	conn, err := connector.Get(cfg.Connector.Class, connector.Config{
 		Name:    cfg.Connector.Name,
 		Raw:     data,
-		Storage: storage,
+		Storage: stor,
 	})
 	if err != nil {
 		return err
@@ -96,5 +101,5 @@ func run() error {
 		return err
 	}
 	log.Info().Msg("Connector stopped")
-	return storage.Close()
+	return stor.Close()
 }

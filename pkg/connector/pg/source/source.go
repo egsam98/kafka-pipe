@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/dgraph-io/badger/v4"
 	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"
@@ -23,7 +24,6 @@ import (
 
 	"kafka-pipe/pkg/connector"
 	"kafka-pipe/pkg/connector/pg"
-	"kafka-pipe/pkg/warden"
 )
 
 const Plugin = "pgoutput"
@@ -31,7 +31,7 @@ const Plugin = "pgoutput"
 type Source struct {
 	cfg       Config
 	wg        sync.WaitGroup
-	storage   warden.Storage
+	stor      *badger.DB
 	kafka     *kgo.Client
 	replConn  *pgconn.PgConn
 	db        *pgxpool.Pool
@@ -56,7 +56,7 @@ func NewSource(config connector.Config) (*Source, error) {
 
 	s := &Source{
 		cfg:       cfg,
-		storage:   config.Storage,
+		stor:      config.Storage,
 		relations: make(map[uint32]*pglogrepl.RelationMessage),
 		typeMap:   pgtype.NewMap(),
 		events:    make(chan Event),
@@ -172,8 +172,26 @@ func (s *Source) startReplication(ctx context.Context) error {
 		return errors.Wrapf(err, "create replication slot %q", s.cfg.Pg.Slot)
 	}
 
-	if err := s.storage.Get("lsn", &s.lsn); err != nil {
-		if !errors.Is(err, warden.ErrNotFound) {
+	if err := s.stor.View(func(tx *badger.Txn) error {
+		item, err := tx.Get([]byte("lsn"))
+		if err != nil {
+			return err
+		}
+		return item.Value(func(val []byte) error {
+			if err := s.lsn.Scan(val); err != nil {
+				// TODO temp
+				s.log.Err(err).Msg("Parse LSN")
+				u, err := strconv.ParseUint(string(val), 10, 64)
+				if err != nil {
+					return err
+				}
+				s.lsn = pglogrepl.LSN(u)
+			}
+
+			return nil
+		})
+	}); err != nil {
+		if !errors.Is(err, badger.ErrKeyNotFound) {
 			return err
 		}
 		s.log.Warn().Msgf("PostgreSQL: LSN position is not found, using first available one from replication slot")
@@ -433,7 +451,9 @@ func (s *Source) produceEvents() error {
 		}
 
 		if latestLSN != 0 {
-			if err := s.storage.Set("lsn", latestLSN); err != nil {
+			if err := s.stor.Update(func(tx *badger.Txn) error {
+				return tx.Set([]byte("lsn"), []byte(latestLSN.String()))
+			}); err != nil {
 				return err
 			}
 			s.lsn = latestLSN

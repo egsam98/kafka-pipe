@@ -3,9 +3,8 @@ package connector
 import (
 	"context"
 
+	"github.com/dgraph-io/badger/v4"
 	"github.com/pkg/errors"
-
-	"kafka-pipe/pkg/warden"
 )
 
 type Connector interface {
@@ -17,7 +16,7 @@ type Init func(cfg Config) (Connector, error)
 type Config struct {
 	Name    string
 	Raw     []byte
-	Storage warden.Storage
+	Storage *badger.DB
 }
 
 var connectors = make(map[string]Init)
