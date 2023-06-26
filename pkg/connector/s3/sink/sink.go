@@ -134,7 +134,7 @@ func (s *Sink) listenRecords(ctx context.Context, records <-chan *kgo.Record) {
 			if !ok {
 				return
 			}
-			if rec.Offset <= offsets[rec.Partition] {
+			if offset, ok := offsets[rec.Partition]; ok && rec.Offset <= offset {
 				continue
 			}
 
