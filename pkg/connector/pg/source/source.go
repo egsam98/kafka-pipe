@@ -178,17 +178,7 @@ func (s *Source) startReplication(ctx context.Context) error {
 			return err
 		}
 		return item.Value(func(val []byte) error {
-			if err := s.lsn.Scan(val); err != nil {
-				// TODO temp
-				s.log.Err(err).Msg("Parse LSN")
-				u, err := strconv.ParseUint(string(val), 10, 64)
-				if err != nil {
-					return err
-				}
-				s.lsn = pglogrepl.LSN(u)
-			}
-
-			return nil
+			return s.lsn.Scan(val)
 		})
 	}); err != nil {
 		if !errors.Is(err, badger.ErrKeyNotFound) {

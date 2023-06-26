@@ -18,11 +18,11 @@ type Config struct {
 		Bucket          string `yaml:"bucket"`
 		AccessKeyID     string `yaml:"access_key_id"`
 		SecretKeyAccess string `yaml:"secret_key_access"`
+		Flush           struct {
+			Size    int           `yaml:"size"`
+			Timeout time.Duration `yaml:"timeout"`
+		} `yaml:"flush"`
 	} `yaml:"s3"`
-	Flush struct {
-		Size    int           `yaml:"size"`
-		Timeout time.Duration `yaml:"timeout"`
-	} `yaml:"flush"`
 }
 
 func (c *Config) Parse(src []byte) error {
@@ -38,14 +38,20 @@ func (c *Config) Parse(src []byte) error {
 	if c.S3.URL == "" {
 		return errors.New(`"s3.url" is required`)
 	}
+	if c.S3.AccessKeyID == "" {
+		return errors.New(`"s3.access_key_id" is required`)
+	}
+	if c.S3.SecretKeyAccess == "" {
+		return errors.New(`"s3.secret_key_access" is required`)
+	}
 	if c.S3.Bucket == "" {
 		return errors.New(`"s3.bucket" is required`)
 	}
-	if c.Flush.Size == 0 {
-		return errors.New(`"flush.size" is required`)
+	if c.S3.Flush.Size == 0 {
+		return errors.New(`"s3.flush.size" is required`)
 	}
-	if c.Flush.Timeout == 0 {
-		return errors.New(`"flush.timeout" is required`)
+	if c.S3.Flush.Timeout == 0 {
+		return errors.New(`"s3.flush.timeout" is required`)
 	}
 	return nil
 }

@@ -28,7 +28,7 @@ type Sink struct {
 func NewSink(config connector.Config) (*Sink, error) {
 	var cfg Config
 	if err := cfg.Parse(config.Raw); err != nil {
-		return nil, errors.Wrap(err, "parse sink config")
+		return nil, err
 	}
 
 	return &Sink{
@@ -124,7 +124,7 @@ func (s *Sink) listenRecords(ctx context.Context, records <-chan *kgo.Record) {
 	offsets := make(map[int32]int64)
 	var overflowKey string
 
-	ticker := time.NewTicker(s.cfg.Flush.Timeout)
+	ticker := time.NewTicker(s.cfg.S3.Flush.Timeout)
 	defer ticker.Stop()
 
 	for {
@@ -138,10 +138,10 @@ func (s *Sink) listenRecords(ctx context.Context, records <-chan *kgo.Record) {
 				continue
 			}
 
-			key := rec.Timestamp.UTC().Round(s.cfg.Flush.Timeout).Format("2006/01/02/15:04:05")
+			key := rec.Timestamp.UTC().Round(s.cfg.S3.Flush.Timeout).Format("2006/01/02/15:04:05")
 			parts[key] = append(parts[key], rec)
 			offsets[rec.Partition] = rec.Offset
-			if len(parts[key]) < s.cfg.Flush.Size {
+			if len(parts[key]) < s.cfg.S3.Flush.Size {
 				continue
 			}
 			overflowKey = key
