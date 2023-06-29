@@ -406,9 +406,14 @@ func (s *Source) produceEvents() error {
 				return errors.Wrapf(err, "marshal event data: %+v", event.Data)
 			}
 
+			key, err := pg.KafkaKey(event.Data)
+			if err != nil {
+				return err
+			}
+
 			batch = append(batch, &kgo.Record{
 				Topic: s.cfg.Kafka.Topic.Prefix + "." + event.Table,
-				Key:   []byte(fmt.Sprintf(`{"id": %q}`, event.Data["id"])),
+				Key:   key,
 				Value: value,
 				Headers: []kgo.RecordHeader{
 					{

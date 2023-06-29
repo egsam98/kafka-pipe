@@ -4,24 +4,25 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
-	"github.com/Shopify/sarama"
+	"github.com/cheggaaa/pb/v3"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
-	"github.com/schollz/progressbar/v3"
+	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kgo"
 
 	"kafka-pipe/pkg/connector"
 	"kafka-pipe/pkg/connector/pg"
 )
 
 type Snapshot struct {
-	cfg      Config
-	db       *pgxpool.Pool
-	prod     sarama.SyncProducer
-	sarAdmin sarama.ClusterAdmin
+	cfg   Config
+	db    *pgxpool.Pool
+	kafka *kgo.Client
+	errs  chan error
 }
 
 func NewSnapshot(config connector.Config) (*Snapshot, error) {
@@ -29,29 +30,39 @@ func NewSnapshot(config connector.Config) (*Snapshot, error) {
 	if err := cfg.Parse(config.Raw); err != nil {
 		return nil, err
 	}
-	return &Snapshot{cfg: cfg}, nil
+	return &Snapshot{
+		cfg:  cfg,
+		errs: make(chan error),
+	}, nil
 }
 
 func (s *Snapshot) Run(ctx context.Context) error {
+	// Init Kafka client
 	var err error
-	if s.sarAdmin, err = sarama.NewClusterAdmin(s.cfg.Kafka.Brokers, nil); err != nil {
-		return errors.Wrap(err, "init Kafka admin")
+	if s.kafka, err = kgo.NewClient(
+		kgo.SeedBrokers(s.cfg.Kafka.Brokers...),
+		kgo.MaxBufferedRecords(s.cfg.Kafka.Batch.Size),
+		kgo.ProducerLinger(s.cfg.Kafka.Batch.Timeout),
+		kgo.ProducerBatchCompression(kgo.Lz4Compression()),
+	); err != nil {
+		return errors.Wrap(err, "init Kafka client")
 	}
-	defer s.sarAdmin.Close()
+	if err := s.kafka.Ping(ctx); err != nil {
+		return errors.Wrap(err, "ping Kafka client")
+	}
 
-	// Init Kafka producer
-	sarCfg := sarama.NewConfig()
-	sarCfg.Net.MaxOpenRequests = 1
-	sarCfg.Producer.Idempotent = true
-	sarCfg.Producer.RequiredAcks = sarama.WaitForAll
-	sarCfg.Producer.Return.Successes = true
-	sarCfg.Producer.Retry.Max = 10
-	sarCfg.Producer.Retry.Backoff = 100 * time.Millisecond
-	sarCfg.Metadata.AllowAutoTopicCreation = false
-	if s.prod, err = sarama.NewSyncProducer(s.cfg.Kafka.Brokers, sarCfg); err != nil {
-		return errors.Wrap(err, "init Kafka producer")
+	kafkaAdmin := kadm.NewClient(s.kafka)
+	// Create topics if not exist
+	for _, table := range s.cfg.Pg.Tables {
+		topic := s.cfg.Kafka.Topic.Prefix + "." + table
+		res, err := kafkaAdmin.CreateTopic(ctx, s.cfg.Kafka.Topic.Partitions, s.cfg.Kafka.Topic.ReplicationFactor, map[string]*string{
+			"compression.type": &s.cfg.Kafka.Topic.CompressionType,
+			"cleanup.policy":   &s.cfg.Kafka.Topic.CleanupPolicy,
+		}, topic)
+		if err != nil && !errors.Is(res.Err, kerr.TopicAlreadyExists) {
+			return errors.Wrapf(err, "create topic %q", topic)
+		}
 	}
-	defer s.prod.Close()
 
 	poolCfg, err := pgxpool.ParseConfig(s.cfg.Pg.Url)
 	if err != nil {
@@ -64,149 +75,90 @@ func (s *Snapshot) Run(ctx context.Context) error {
 	if s.db, err = pgxpool.NewWithConfig(ctx, poolCfg); err != nil {
 		return errors.Wrap(err, "connect to PostgreSQL")
 	}
-	defer s.db.Close()
 
 	for _, table := range s.cfg.Pg.Tables {
-		if err := s.run(ctx, table); err != nil {
+		if err := s.query(ctx, table); err != nil {
+			if errors.Is(err, context.Canceled) {
+				break
+			}
 			return err
 		}
 	}
+
+	log.Info().Msg("Kafka: Close producer")
+	s.kafka.Close()
+	log.Info().Msg("PostgreSQL: Close")
+	s.db.Close()
 	return nil
 }
 
-func (s *Snapshot) run(ctx context.Context, table string) error {
-	select {
-	case <-ctx.Done():
-		return nil
-	default:
-	}
-
-	// Create topic if not exists
-	topic := s.cfg.Kafka.Topic.Prefix + "." + table
-	if err := s.sarAdmin.CreateTopic(topic, &sarama.TopicDetail{
-		NumPartitions:     s.cfg.Kafka.Topic.Partitions,
-		ReplicationFactor: s.cfg.Kafka.Topic.ReplicationFactor,
-		ConfigEntries: map[string]*string{
-			"compression.type": &s.cfg.Kafka.Topic.CompressionType,
-			"cleanup.policy":   &s.cfg.Kafka.Topic.CleanupPolicy,
-		},
-	}, false); err != nil {
-		if !errors.Is(err, sarama.ErrTopicAlreadyExists) {
-			return errors.Wrapf(err, "create topic %q", topic)
-		}
-	}
-
-	res, err := s.query(ctx, table)
-	if err != nil {
-		return err
-	}
-	return s.handleQuery(ctx, table, res)
-}
-
-type queryResult struct {
-	Count  int64
-	Data   chan *sarama.ProducerMessage
-	Errors chan error
-}
-
-func (s *Snapshot) query(ctx context.Context, table string) (*queryResult, error) {
-	sql := fmt.Sprintf(`SELECT COUNT(data) FROM (SELECT * FROM %s %s) data`, table, s.cfg.Pg.Condition)
+func (s *Snapshot) query(ctx context.Context, table string) error {
+	sql := fmt.Sprintf(`SELECT COUNT(data) FROM (SELECT 1 FROM %s %s) data`, table, s.cfg.Pg.Condition)
 	log.Info().Msg("PostgreSQL: " + sql)
 	rows, err := s.db.Query(ctx, sql)
 	if err != nil {
-		return nil, errors.Wrap(err, "query rows count")
+		return errors.Wrap(err, "query rows count")
 	}
-	count, err := pgx.CollectOneRow(rows, pgx.RowTo[int64])
+	count, err := pgx.CollectOneRow(rows, pgx.RowTo[int])
 	if err != nil {
-		return nil, errors.Wrap(err, "query snapshot rows count")
+		return errors.Wrap(err, "query snapshot rows count")
 	}
 
 	sql = fmt.Sprintf(`SELECT data.*, count(data.*) OVER() AS total FROM (SELECT * FROM %s %s) data`, table, s.cfg.Pg.Condition)
 	log.Info().Msg("PostgreSQL: " + sql)
 	if rows, err = s.db.Query(ctx, sql); err != nil {
-		return nil, errors.Wrap(err, "query snapshot")
+		return errors.Wrap(err, "query snapshot")
 	}
+	defer rows.Close()
 
-	res := &queryResult{
-		Count:  count,
-		Data:   make(chan *sarama.ProducerMessage, s.cfg.Kafka.BatchSize),
-		Errors: make(chan error),
-	}
+	bar := pb.StartNew(count)
+	produceErr := make(chan error, 1)
 
-	go func() {
-		defer rows.Close()
-		defer close(res.Data)
-
-		for rows.Next() {
-			data, err := pgx.RowToMap(rows)
-			if err != nil {
-				res.Errors <- errors.Wrap(err, "scan into map")
-				return
-			}
-			value, err := json.Marshal(data)
-			if err != nil {
-				res.Errors <- errors.Wrapf(err, "marshal %+v", data)
-				return
-			}
-
-			res.Data <- &sarama.ProducerMessage{
-				Topic: s.cfg.Kafka.Topic.Prefix + "." + table,
-				Key:   sarama.StringEncoder(fmt.Sprintf(`{"id": %q}`, data["id"])),
-				Value: sarama.ByteEncoder(value),
-			}
-		}
-
-		if err := rows.Err(); err != nil {
-			res.Errors <- errors.Wrap(err, "rows error")
-		}
-	}()
-
-	return res, nil
-}
-
-func (s *Snapshot) handleQuery(ctx context.Context, table string, res *queryResult) error {
-	bar := progressbar.Default(res.Count, "Snapshot of "+table)
-	batch := make([]*sarama.ProducerMessage, 0, s.cfg.Kafka.BatchSize)
-MainLoop:
-	for {
+	for rows.Next() {
 		select {
-		case data, ok := <-res.Data:
-			if ok {
-				batch = append(batch, data)
-				if len(batch) < s.cfg.Kafka.BatchSize {
-					continue
-				}
-			}
-
-			for {
-				err := s.prod.SendMessages(batch)
-				if err == nil {
-					break
-				}
-				log.Err(err).Msg("Send to Kafka")
-
-				select {
-				case <-ctx.Done():
-					return nil
-				case <-time.After(5 * time.Second):
-				}
-			}
-
-			_ = bar.Add(len(batch))
-
-			if !ok {
-				break MainLoop
-			}
-			batch = make([]*sarama.ProducerMessage, 0, s.cfg.Kafka.BatchSize)
-		case err := <-res.Errors:
-			_ = bar.Clear()
-			if errors.Is(err, context.Canceled) {
-				log.Info().Msg("Interrupt")
-				return nil
+		case err := <-produceErr:
+			if err := s.kafka.AbortBufferedRecords(context.Background()); err != nil {
+				log.Err(err).Msgf("Kafka: Abort buffered records")
 			}
 			return err
+		default:
 		}
+
+		data, err := pgx.RowToMap(rows)
+		if err != nil {
+			return errors.Wrap(err, "scan into map")
+		}
+		key, err := pg.KafkaKey(data)
+		if err != nil {
+			return err
+		}
+		value, err := json.Marshal(data)
+		if err != nil {
+			return errors.Wrapf(err, "marshal %+v", data)
+		}
+
+		s.kafka.Produce(ctx, &kgo.Record{
+			Key:   key,
+			Value: value,
+			Topic: s.cfg.Kafka.Topic.Prefix + "." + table,
+		}, func(_ *kgo.Record, err error) {
+			if err != nil {
+				select {
+				case produceErr <- err:
+				default:
+				}
+				return
+			}
+			bar.Increment()
+		})
 	}
 
-	return bar.Close()
+	if err := rows.Err(); err != nil {
+		return errors.Wrap(err, "rows error")
+	}
+	if err := s.kafka.Flush(context.Background()); err != nil {
+		return errors.Wrap(err, "flush Kafka records")
+	}
+	bar.Finish()
+	return nil
 }

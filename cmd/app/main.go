@@ -19,6 +19,7 @@ import (
 	"kafka-pipe/pkg/connector"
 	_ "kafka-pipe/pkg/connector/pg/snapshot"
 	_ "kafka-pipe/pkg/connector/pg/source"
+	_ "kafka-pipe/pkg/connector/s3/backup"
 	_ "kafka-pipe/pkg/connector/s3/sink"
 )
 
