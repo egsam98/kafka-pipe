@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
+	"sync/atomic"
 
 	"github.com/cheggaaa/pb/v3"
 	"github.com/jackc/pgx/v5"
@@ -111,17 +113,16 @@ func (s *Snapshot) query(ctx context.Context, table string) error {
 	}
 	defer rows.Close()
 
-	bar := pb.StartNew(count)
-	produceErr := make(chan error, 1)
+	var (
+		bar        = pb.StartNew(count)
+		produceErr error
+		once       atomic.Bool
+		wg         sync.WaitGroup
+	)
 
 	for rows.Next() {
-		select {
-		case err := <-produceErr:
-			if err := s.kafka.AbortBufferedRecords(context.Background()); err != nil {
-				log.Err(err).Msgf("Kafka: Abort buffered records")
-			}
-			return err
-		default:
+		if produceErr != nil {
+			break
 		}
 
 		data, err := pgx.RowToMap(rows)
@@ -137,15 +138,21 @@ func (s *Snapshot) query(ctx context.Context, table string) error {
 			return errors.Wrapf(err, "marshal %+v", data)
 		}
 
+		wg.Add(1)
 		s.kafka.Produce(ctx, &kgo.Record{
 			Key:   key,
 			Value: value,
 			Topic: s.cfg.Kafka.Topic.Prefix + "." + table,
 		}, func(_ *kgo.Record, err error) {
+			defer wg.Done()
 			if err != nil {
-				select {
-				case produceErr <- err:
-				default:
+				if !once.Swap(true) {
+					produceErr = err
+					wg.Add(1)
+					go func() {
+						defer wg.Done()
+						_ = s.kafka.AbortBufferedRecords(context.Background())
+					}()
 				}
 				return
 			}
@@ -153,11 +160,12 @@ func (s *Snapshot) query(ctx context.Context, table string) error {
 		})
 	}
 
+	wg.Wait()
+	if produceErr != nil {
+		return produceErr
+	}
 	if err := rows.Err(); err != nil {
 		return errors.Wrap(err, "rows error")
-	}
-	if err := s.kafka.Flush(context.Background()); err != nil {
-		return errors.Wrap(err, "flush Kafka records")
 	}
 	bar.Finish()
 	return nil
