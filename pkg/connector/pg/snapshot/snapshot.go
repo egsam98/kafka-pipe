@@ -24,7 +24,6 @@ type Snapshot struct {
 	cfg   Config
 	db    *pgxpool.Pool
 	kafka *kgo.Client
-	errs  chan error
 }
 
 func NewSnapshot(config connector.Config) (*Snapshot, error) {
@@ -32,10 +31,7 @@ func NewSnapshot(config connector.Config) (*Snapshot, error) {
 	if err := cfg.Parse(config.Raw); err != nil {
 		return nil, err
 	}
-	return &Snapshot{
-		cfg:  cfg,
-		errs: make(chan error),
-	}, nil
+	return &Snapshot{cfg: cfg}, nil
 }
 
 func (s *Snapshot) Run(ctx context.Context) error {
@@ -121,21 +117,23 @@ func (s *Snapshot) query(ctx context.Context, table string) error {
 	)
 
 	for rows.Next() {
-		if produceErr != nil {
-			break
-		}
-
 		data, err := pgx.RowToMap(rows)
 		if err != nil {
-			return errors.Wrap(err, "scan into map")
+			produceErr = errors.Wrap(err, "scan into map")
+			break
 		}
 		key, err := pg.KafkaKey(data)
 		if err != nil {
-			return err
+			produceErr = errors.Wrap(err, "scan into map")
+			break
 		}
 		value, err := json.Marshal(data)
 		if err != nil {
-			return errors.Wrapf(err, "marshal %+v", data)
+			produceErr = errors.Wrapf(err, "marshal %+v", data)
+			break
+		}
+		if produceErr != nil {
+			break
 		}
 
 		wg.Add(1)
@@ -145,18 +143,18 @@ func (s *Snapshot) query(ctx context.Context, table string) error {
 			Topic: s.cfg.Kafka.Topic.Prefix + "." + table,
 		}, func(_ *kgo.Record, err error) {
 			defer wg.Done()
-			if err != nil {
-				if !once.Swap(true) {
-					produceErr = err
-					wg.Add(1)
-					go func() {
-						defer wg.Done()
-						_ = s.kafka.AbortBufferedRecords(context.Background())
-					}()
-				}
+			if err == nil {
+				bar.Increment()
 				return
 			}
-			bar.Increment()
+			if !once.Swap(true) {
+				produceErr = err
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					_ = s.kafka.AbortBufferedRecords(context.Background())
+				}()
+			}
 		})
 	}
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 
 	"kafka-pipe/pkg/connector"
+	"kafka-pipe/pkg/connector/s3"
 )
 
 type Sink struct {
@@ -138,7 +140,7 @@ func (s *Sink) listenRecords(ctx context.Context, records <-chan *kgo.Record) {
 				continue
 			}
 
-			key := rec.Timestamp.UTC().Round(s.cfg.S3.Flush.Timeout).Format("2006/01/02/15:04:05")
+			key := rec.Timestamp.UTC().Round(s.cfg.S3.Flush.Timeout).Format(s3.TimeFmt)
 			parts[key] = append(parts[key], rec)
 			offsets[rec.Partition] = rec.Offset
 			if len(parts[key]) < s.cfg.S3.Flush.Size {
@@ -185,8 +187,13 @@ func (s *Sink) uploadToS3(filename string, records []*kgo.Record) error {
 	var buf bytes.Buffer
 	gzw := gzip.NewWriter(&buf)
 	_, _ = gzw.Write([]byte{'['})
-	for i, msg := range records {
-		_, _ = gzw.Write(msg.Value)
+	for i, record := range records {
+		b, err := json.Marshal(s3.NewRecord(record))
+		if err != nil {
+			return errors.Wrap(err, "marshal Kafka record's data")
+		}
+
+		_, _ = gzw.Write(b)
 		var tail byte = ','
 		if i == len(records)-1 {
 			tail = ']'
