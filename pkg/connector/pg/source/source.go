@@ -172,6 +172,7 @@ func (s *Source) startReplication(ctx context.Context) error {
 		return errors.Wrapf(err, "create replication slot %q", s.cfg.Pg.Slot)
 	}
 
+	// Get last committed LSN
 	if err := s.stor.View(func(tx *badger.Txn) error {
 		item, err := tx.Get([]byte("lsn"))
 		if err != nil {

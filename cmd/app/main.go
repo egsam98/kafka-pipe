@@ -41,6 +41,7 @@ func main() {
 }
 
 type Config struct {
+	LogLevel  zerolog.Level `yaml:"log.level"`
 	Connector struct {
 		Name  string `yaml:"name"`
 		Class string `yaml:"class"`
@@ -74,6 +75,8 @@ func run() error {
 	if err := cfg.Parse(data); err != nil {
 		return err
 	}
+
+	log.Logger = log.Logger.Level(cfg.LogLevel)
 
 	stor, err := badger.Open(badger.
 		DefaultOptions(DataFolder).
