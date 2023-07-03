@@ -327,15 +327,17 @@ func (s *Source) recvEvent(ctx context.Context) error {
 		return err
 	}
 
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case s.events <- Event{
+	event := Event{
 		Start: xld.WALStart,
 		End:   xld.WALStart + pglogrepl.LSN(len(xld.WALData)),
 		Table: table,
 		Data:  data,
-	}:
+	}
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case s.events <- event:
 		return nil
 	}
 }
