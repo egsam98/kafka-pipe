@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"io"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"syscall"
@@ -28,20 +31,16 @@ const DataFolder = "data"
 func main() {
 	zerolog.ErrorStackMarshaler = pkgerrors.MarshalStack
 	zerolog.TimeFieldFormat = time.RFC3339Nano
-	log.Logger = zerolog.New(zerolog.ConsoleWriter{
-		Out:        os.Stdout,
-		TimeFormat: time.RFC3339Nano,
-	}).
-		With().
-		Timestamp().
-		Logger()
 	if err := run(); err != nil {
 		log.Fatal().Stack().Err(err).Msg("Start Kafka Pipe")
 	}
 }
 
 type Config struct {
-	LogLevel  zerolog.Level `yaml:"log.level"`
+	Log struct {
+		Pretty bool          `yaml:"pretty"`
+		Level  zerolog.Level `yaml:"level"`
+	} `yaml:"log"`
 	Connector struct {
 		Name  string `yaml:"name"`
 		Class string `yaml:"class"`
@@ -76,7 +75,15 @@ func run() error {
 		return err
 	}
 
-	log.Logger = log.Logger.Level(cfg.LogLevel)
+	var w io.Writer = os.Stdout
+	if cfg.Log.Pretty {
+		w = zerolog.ConsoleWriter{Out: w, TimeFormat: time.RFC3339Nano}
+	}
+	log.Logger = zerolog.New(w).
+		Level(cfg.Log.Level).
+		With().
+		Timestamp().
+		Logger()
 
 	stor, err := badger.Open(badger.
 		DefaultOptions(DataFolder).
@@ -93,6 +100,8 @@ func run() error {
 	if err != nil {
 		return err
 	}
+
+	go http.ListenAndServe(":8081", nil) //nolint:errcheck
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()

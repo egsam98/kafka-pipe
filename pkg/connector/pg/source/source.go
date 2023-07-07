@@ -74,7 +74,6 @@ func (s *Source) Run(ctx context.Context) error {
 	var err error
 	if s.kafka, err = kgo.NewClient(
 		kgo.SeedBrokers(s.cfg.Kafka.Brokers...),
-		kgo.ProducerBatchCompression(kgo.Lz4Compression()),
 	); err != nil {
 		return errors.Wrap(err, "init Kafka client")
 	}
@@ -445,7 +444,7 @@ func (s *Source) produceEvents() error {
 				return errors.Wrap(err, "produce to Kafka")
 			}
 			s.log.Info().Int("count", len(batch)).Msg("Kafka: Events have been published")
-			batch = make([]*kgo.Record, 0, s.cfg.Kafka.Batch.Size)
+			batch = batch[:0]
 		}
 
 		if latestLSN != 0 {
@@ -456,6 +455,7 @@ func (s *Source) produceEvents() error {
 			}
 			s.lsn = latestLSN
 			latestLSN = 0
+			s.log.Info().Msg("Commit LSN")
 		}
 	}
 }
