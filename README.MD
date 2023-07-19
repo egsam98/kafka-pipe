@@ -1,10 +1,10 @@
 # List of connector classes:
-| Class                       | Source     | Sink  |
-|-----------------------------|------------|-------|
-| [pg.Source](#pg.Source)     | PostgreSQL | Kafka |
-| [pg.Snapshot](#pg.Snapshot) | PostgreSQL | Kafka |
-| [s3.Sink](#s3.Sink)         | Kafka      | S3    |
-| [s3.Backup](#s3.Backup)     | S3         | Kafka | 
+| Class                      | Source     | Sink  |
+|----------------------------|------------|-------|
+| [pg.Source](#pgsource)     | PostgreSQL | Kafka |
+| [pg.Snapshot](#pgsnapshot) | PostgreSQL | Kafka |
+| [s3.Sink](#s3sink)         | Kafka      | S3    |
+| [s3.Backup](#s3backup)     | S3         | Kafka | 
 
 # Overview
 To start application you need to pass YAML-based configuration.
@@ -20,10 +20,8 @@ connector:
 Additional params are particular for every class.
 
 # Supported classes
-<a id="supported-classes"></a>
 
 ## pg.Source
-<a id="pg.Source"></a>
 Transmits events from PostgreSQL to Kafka topics via logical replication and "pgoutput" plugin.
 
 Config parameters
@@ -46,7 +44,6 @@ Config parameters
 | kafka:batch:timeout            |          | Producer's batch timeout. Default is `5s`                           |
 
 ## pg.Snapshot
-<a id="pg.Snapshot"></a>
 Selects all/certain rows from tables and supplies to Kafka topics. Connector stops when all rows are produced
 
 Config parameters
@@ -69,10 +66,8 @@ Config parameters
 | kafka:batch:timeout            |          | Producer's batch timeout. Default is `5s`                           |
 
 ## s3.Sink
-<a id="s3.Sink"></a>
 No description
 
 ## s3.Backup
-<a id="s3.Backup"></a>
 No description
 
