@@ -25,7 +25,9 @@ Additional params are particular for every class.
 ## pg.Source
 <a id="pg.Source"></a>
 Transmits events from PostgreSQL to Kafka topics via logical replication and "pgoutput" plugin.
-### Config parameters
+
+Config parameters
+
 | Name                           | Required | Description                                                         |
 |--------------------------------|----------|---------------------------------------------------------------------|
 | pg:skip.delete                 |          | Skip delete-events. Default is `false`                              |
@@ -46,6 +48,9 @@ Transmits events from PostgreSQL to Kafka topics via logical replication and "pg
 ## pg.Snapshot
 <a id="pg.Snapshot"></a>
 Selects all/certain rows from tables and supplies to Kafka topics. Connector stops when all rows are produced
+
+Config parameters
+
 | Name                           | Required | Description                                                         |
 |--------------------------------|----------|---------------------------------------------------------------------|
 | pg:skip.delete                 |          | Skip delete-events. Default is `false`                              |
