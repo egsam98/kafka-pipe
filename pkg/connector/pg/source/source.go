@@ -29,6 +29,7 @@ import (
 const Plugin = "pgoutput"
 
 type Source struct {
+	name      string
 	cfg       Config
 	wg        sync.WaitGroup
 	stor      *badger.DB
@@ -55,6 +56,7 @@ func NewSource(config connector.Config) (*Source, error) {
 	}
 
 	s := &Source{
+		name:      config.Name,
 		cfg:       cfg,
 		stor:      config.Storage,
 		relations: make(map[uint32]*pglogrepl.RelationMessage),
@@ -134,14 +136,14 @@ func (s *Source) startReplication(ctx context.Context) error {
 	}
 
 	// Create health check table
-	sql := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (id int primary key, timestamp timestamp)`, s.cfg.Pg.Health.Table)
+	sql := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (id int primary key, timestamp timestamp)`, s.cfg.Pg.HealthTable)
 	if _, err := s.db.Exec(ctx, sql); err != nil {
 		return errors.Wrap(err, sql)
 	}
 	s.log.Info().Msg("PostgreSQL: " + sql)
 
 	// Create/edit publication
-	tables := strings.Join(append(s.cfg.Pg.Tables, s.cfg.Pg.Health.Table), ", ")
+	tables := strings.Join(append(s.cfg.Pg.Tables, s.cfg.Pg.HealthTable), ", ")
 	sql = fmt.Sprintf("CREATE PUBLICATION %s FOR TABLE %s", s.cfg.Pg.Publication, tables)
 	switch _, err := s.db.Exec(ctx, sql); {
 	case err == nil:
@@ -173,7 +175,7 @@ func (s *Source) startReplication(ctx context.Context) error {
 
 	// Get last committed LSN
 	if err := s.stor.View(func(tx *badger.Txn) error {
-		item, err := tx.Get([]byte("lsn"))
+		item, err := tx.Get(s.lsnKey())
 		if err != nil {
 			return err
 		}
@@ -222,7 +224,7 @@ func (s *Source) healthPg(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(s.cfg.Pg.Health.Interval):
+		case <-time.After(10 * time.Second):
 			if s.replConn.IsClosed() {
 				continue
 			}
@@ -233,9 +235,9 @@ func (s *Source) healthPg(ctx context.Context) {
 			}
 
 			sql := fmt.Sprintf("INSERT INTO %s (id, timestamp) VALUES (0, now()) ON CONFLICT (id) DO UPDATE SET "+
-				"timestamp = now()", s.cfg.Pg.Health.Table)
+				"timestamp = now()", s.cfg.Pg.HealthTable)
 			if _, err := s.db.Exec(ctx, sql); err != nil {
-				s.log.Err(err).Msgf("PostgreSQL: Health check to %q table", s.cfg.Pg.Health.Table)
+				s.log.Err(err).Msgf("PostgreSQL: Health check to %q table", s.cfg.Pg.HealthTable)
 			}
 		}
 	}
@@ -349,7 +351,7 @@ func (s *Source) newEventData(relationID uint32, cols []*pglogrepl.TupleDataColu
 
 	table := rel.Namespace + "." + rel.RelationName
 	// Skip health check table
-	if table == s.cfg.Pg.Health.Table {
+	if table == s.cfg.Pg.HealthTable {
 		return "", nil, nil
 	}
 
@@ -449,7 +451,7 @@ func (s *Source) produceEvents() error {
 
 		if latestLSN != 0 {
 			if err := s.stor.Update(func(tx *badger.Txn) error {
-				return tx.Set([]byte("lsn"), []byte(latestLSN.String()))
+				return tx.Set(s.lsnKey(), []byte(latestLSN.String()))
 			}); err != nil {
 				return err
 			}
@@ -467,4 +469,8 @@ func (s *Source) lsnHook() zerolog.HookFunc {
 		}
 		e.Stringer("lsn", s.lsn)
 	}
+}
+
+func (s *Source) lsnKey() []byte {
+	return []byte(s.name + "/lsn")
 }
