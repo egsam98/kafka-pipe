@@ -1,4 +1,4 @@
-# List of connector classes:
+# Supported classes:
 | Class                      | Source     | Sink  |
 |----------------------------|------------|-------|
 | [pg.Source](#pgsource)     | PostgreSQL | Kafka |
@@ -18,8 +18,6 @@ connector:
   class: "any class described in \"Supported classes\" section"
 ```
 Additional params are particular for every class.
-
-# Supported classes
 
 ## pg.Source
 Transmits events from PostgreSQL to Kafka topics via logical replication and "pgoutput" plugin.
