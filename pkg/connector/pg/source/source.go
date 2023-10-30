@@ -31,6 +31,7 @@ const Plugin = "pgoutput"
 type Source struct {
 	name      string
 	cfg       Config
+	pgCfg     pgxpool.Config
 	wg        sync.WaitGroup
 	stor      *badger.DB
 	kafka     *kgo.Client
@@ -54,10 +55,15 @@ func NewSource(config connector.Config) (*Source, error) {
 	if err := cfg.Parse(config.Raw); err != nil {
 		return nil, err
 	}
+	pgCfg, err := pgxpool.ParseConfig(cfg.Pg.Url)
+	if err != nil {
+		return nil, errors.Wrap(err, "parse PostgreSQL connection URL")
+	}
 
 	s := &Source{
 		name:      config.Name,
 		cfg:       cfg,
+		pgCfg:     *pgCfg,
 		stor:      config.Storage,
 		relations: make(map[uint32]*pglogrepl.RelationMessage),
 		typeMap:   pgtype.NewMap(),
@@ -96,7 +102,7 @@ func (s *Source) Run(ctx context.Context) error {
 		}
 	}
 
-	if s.db, err = pgxpool.New(ctx, s.cfg.Pg.Url); err != nil {
+	if s.db, err = pgxpool.NewWithConfig(ctx, &s.pgCfg); err != nil {
 		return errors.Wrap(err, "connect to PostgreSQL")
 	}
 
@@ -427,6 +433,14 @@ func (s *Source) produceEvents() error {
 					{
 						Key:   "ts_ms",
 						Value: []byte(strconv.FormatInt(time.Now().UnixMilli(), 10)),
+					},
+					{
+						Key:   "host",
+						Value: []byte(s.pgCfg.ConnConfig.Host),
+					},
+					{
+						Key:   "database",
+						Value: []byte(s.pgCfg.ConnConfig.Database),
 					},
 					{
 						Key:   "table",

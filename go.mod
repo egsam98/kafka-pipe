@@ -1,6 +1,6 @@
 module kafka-pipe
 
-go 1.19
+go 1.21
 
 require (
 	github.com/cheggaaa/pb/v3 v3.1.2

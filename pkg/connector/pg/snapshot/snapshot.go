@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/cheggaaa/pb/v3"
 	"github.com/jackc/pgx/v5"
@@ -23,6 +25,7 @@ import (
 type Snapshot struct {
 	cfg   Config
 	db    *pgxpool.Pool
+	pgCfg pgxpool.Config
 	kafka *kgo.Client
 }
 
@@ -31,7 +34,15 @@ func NewSnapshot(config connector.Config) (*Snapshot, error) {
 	if err := cfg.Parse(config.Raw); err != nil {
 		return nil, err
 	}
-	return &Snapshot{cfg: cfg}, nil
+	pgCfg, err := pgxpool.ParseConfig(cfg.Pg.Url)
+	if err != nil {
+		return nil, errors.Wrap(err, "parse PostgreSQL connection URL")
+	}
+	pgCfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+		pg.RegisterTypes(conn.TypeMap())
+		return nil
+	}
+	return &Snapshot{cfg: cfg, pgCfg: *pgCfg}, nil
 }
 
 func (s *Snapshot) Run(ctx context.Context) error {
@@ -62,15 +73,7 @@ func (s *Snapshot) Run(ctx context.Context) error {
 		}
 	}
 
-	poolCfg, err := pgxpool.ParseConfig(s.cfg.Pg.Url)
-	if err != nil {
-		return errors.Wrap(err, "parse PostgreSQL connection URL")
-	}
-	poolCfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
-		pg.RegisterTypes(conn.TypeMap())
-		return nil
-	}
-	if s.db, err = pgxpool.NewWithConfig(ctx, poolCfg); err != nil {
+	if s.db, err = pgxpool.NewWithConfig(ctx, &s.pgCfg); err != nil {
 		return errors.Wrap(err, "connect to PostgreSQL")
 	}
 
@@ -141,6 +144,24 @@ func (s *Snapshot) query(ctx context.Context, table string) error {
 			Key:   key,
 			Value: value,
 			Topic: s.cfg.Kafka.Topic.Prefix + "." + table,
+			Headers: []kgo.RecordHeader{
+				{
+					Key:   "ts_ms",
+					Value: []byte(strconv.FormatInt(time.Now().UnixMilli(), 10)),
+				},
+				{
+					Key:   "host",
+					Value: []byte(s.pgCfg.ConnConfig.Host),
+				},
+				{
+					Key:   "database",
+					Value: []byte(s.pgCfg.ConnConfig.Database),
+				},
+				{
+					Key:   "table",
+					Value: []byte(table),
+				},
+			},
 		}, func(_ *kgo.Record, err error) {
 			defer wg.Done()
 			if err == nil {
