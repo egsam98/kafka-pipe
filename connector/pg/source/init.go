@@ -1,7 +1,7 @@
 package source
 
 import (
-	"kafka-pipe/pkg/connector"
+	"kafka-pipe/connector"
 )
 
 func init() {

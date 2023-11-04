@@ -18,8 +18,8 @@ import (
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 
-	"kafka-pipe/pkg/connector"
-	"kafka-pipe/pkg/connector/pg"
+	"kafka-pipe/connector"
+	"kafka-pipe/connector/pg"
 )
 
 type Snapshot struct {

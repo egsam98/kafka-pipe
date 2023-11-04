@@ -15,8 +15,8 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/twmb/franz-go/pkg/kgo"
 
-	"kafka-pipe/pkg/connector"
-	"kafka-pipe/pkg/connector/s3"
+	"kafka-pipe/connector"
+	"kafka-pipe/connector/s3"
 )
 
 type Sink struct {

@@ -15,15 +15,14 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/rs/zerolog/pkgerrors"
-	"golang.org/x/sync/errgroup"
 	"gopkg.in/yaml.v3"
 
-	"kafka-pipe/pkg/badgerx"
-	"kafka-pipe/pkg/connector"
-	_ "kafka-pipe/pkg/connector/pg/snapshot"
-	_ "kafka-pipe/pkg/connector/pg/source"
-	_ "kafka-pipe/pkg/connector/s3/backup"
-	_ "kafka-pipe/pkg/connector/s3/sink"
+	"kafka-pipe/connector"
+	_ "kafka-pipe/connector/pg/snapshot"
+	_ "kafka-pipe/connector/pg/source"
+	_ "kafka-pipe/connector/s3/backup"
+	_ "kafka-pipe/connector/s3/sink"
+	"kafka-pipe/internal/badgerx"
 )
 
 const DataFolder = "data"
@@ -107,10 +106,7 @@ func run() error {
 	defer cancel()
 
 	log.Info().Str("name", cfg.Connector.Name).Str("class", cfg.Connector.Class).Msg("Run connector")
-	var g errgroup.Group
-	g.Go(func() error { return conn.Run(ctx) })
-
-	if err := g.Wait(); err != nil {
+	if err := conn.Run(ctx); err != nil {
 		return err
 	}
 	log.Info().Msg("Connector stopped")
