@@ -11,6 +11,6 @@ func init() {
 			return nil, err
 		}
 		cfg.Storage = config.Storage
-		return NewSource(cfg)
+		return NewSource(cfg), nil
 	})
 }

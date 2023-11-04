@@ -28,21 +28,22 @@ type Snapshot struct {
 	kafka *kgo.Client
 }
 
-func NewSnapshot(cfg Config) (*Snapshot, error) {
-	pgCfg, err := pgxpool.ParseConfig(cfg.Pg.Url)
+func NewSnapshot(cfg Config) *Snapshot {
+	return &Snapshot{cfg: cfg}
+}
+
+func (s *Snapshot) Run(ctx context.Context) error {
+	pgCfg, err := pgxpool.ParseConfig(s.cfg.Pg.Url)
 	if err != nil {
-		return nil, errors.Wrap(err, "parse PostgreSQL connection URL")
+		return errors.Wrap(err, "parse PostgreSQL connection URL")
 	}
 	pgCfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
 		pg.RegisterTypes(conn.TypeMap())
 		return nil
 	}
-	return &Snapshot{cfg: cfg, pgCfg: *pgCfg}, nil
-}
+	s.pgCfg = *pgCfg
 
-func (s *Snapshot) Run(ctx context.Context) error {
 	// Init Kafka client
-	var err error
 	if s.kafka, err = kgo.NewClient(
 		kgo.SeedBrokers(s.cfg.Kafka.Brokers...),
 		kgo.MaxBufferedRecords(s.cfg.Kafka.Batch.Size),
@@ -68,7 +69,7 @@ func (s *Snapshot) Run(ctx context.Context) error {
 		}
 	}
 
-	if s.db, err = pgxpool.NewWithConfig(ctx, &s.pgCfg); err != nil {
+	if s.db, err = pgxpool.NewWithConfig(ctx, pgCfg); err != nil {
 		return errors.Wrap(err, "connect to PostgreSQL")
 	}
 

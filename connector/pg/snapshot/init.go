@@ -10,6 +10,6 @@ func init() {
 		if err := cfg.Parse(config.Raw); err != nil {
 			return nil, err
 		}
-		return NewSnapshot(cfg)
+		return NewSnapshot(cfg), nil
 	})
 }

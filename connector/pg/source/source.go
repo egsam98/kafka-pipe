@@ -47,15 +47,9 @@ type Event struct {
 	Data       map[string]any
 }
 
-func NewSource(cfg Config) (*Source, error) {
-	pgCfg, err := pgxpool.ParseConfig(cfg.Pg.Url)
-	if err != nil {
-		return nil, errors.Wrap(err, "parse PostgreSQL connection URL")
-	}
-
+func NewSource(cfg Config) *Source {
 	s := &Source{
 		cfg:       cfg,
-		pgCfg:     *pgCfg,
 		relations: make(map[uint32]*pglogrepl.RelationMessage),
 		typeMap:   pgtype.NewMap(),
 		events:    make(chan Event),
@@ -65,12 +59,17 @@ func NewSource(cfg Config) (*Source, error) {
 		With().
 		Logger().
 		Hook(s.lsnHook())
-	return s, nil
+	return s
 }
 
 func (s *Source) Run(ctx context.Context) error {
+	pgCfg, err := pgxpool.ParseConfig(s.cfg.Pg.Url)
+	if err != nil {
+		return errors.Wrap(err, "parse PostgreSQL connection URL")
+	}
+	s.pgCfg = *pgCfg
+
 	// Init Kafka client
-	var err error
 	if s.kafka, err = kgo.NewClient(
 		kgo.SeedBrokers(s.cfg.Kafka.Brokers...),
 	); err != nil {
@@ -93,7 +92,7 @@ func (s *Source) Run(ctx context.Context) error {
 		}
 	}
 
-	if s.db, err = pgxpool.NewWithConfig(ctx, &s.pgCfg); err != nil {
+	if s.db, err = pgxpool.NewWithConfig(ctx, pgCfg); err != nil {
 		return errors.Wrap(err, "connect to PostgreSQL")
 	}
 
