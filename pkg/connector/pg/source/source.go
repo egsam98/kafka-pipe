@@ -439,6 +439,10 @@ func (s *Source) produceEvents() error {
 						Value: []byte(s.pgCfg.ConnConfig.Host),
 					},
 					{
+						Key:   "port",
+						Value: []byte(strconv.FormatUint(uint64(s.pgCfg.ConnConfig.Port), 10)),
+					},
+					{
 						Key:   "database",
 						Value: []byte(s.pgCfg.ConnConfig.Database),
 					},
