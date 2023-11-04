@@ -10,12 +10,11 @@
 To start application you need to pass YAML-based configuration.
 Common parameters of config:
 ```yaml
+name: "name of your connector"
+class: "any class described in \"Supported classes\" section"
 log:
   pretty: true
   level: "info"
-connector:
-  name: "name of your connector"
-  class: "any class described in \"Supported classes\" section"
 ```
 Additional params are particular for every class.
 

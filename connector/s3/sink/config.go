@@ -8,6 +8,7 @@ import (
 )
 
 type Config struct {
+	Name  string `yaml:"name"`
 	Kafka struct {
 		Brokers []string `yaml:"brokers"`
 		Topics  []string `yaml:"topics"`

@@ -21,7 +21,6 @@ import (
 
 type Sink struct {
 	wg    sync.WaitGroup
-	name  string
 	cfg   Config
 	kafka *kgo.Client
 	s3    *minio.Client
@@ -32,11 +31,7 @@ func NewSink(config connector.Config) (*Sink, error) {
 	if err := cfg.Parse(config.Raw); err != nil {
 		return nil, err
 	}
-
-	return &Sink{
-		name: config.Name,
-		cfg:  cfg,
-	}, nil
+	return &Sink{cfg: cfg}, nil
 }
 
 func (s *Sink) Run(ctx context.Context) error {
@@ -45,7 +40,7 @@ func (s *Sink) Run(ctx context.Context) error {
 	if s.kafka, err = kgo.NewClient(
 		kgo.SeedBrokers(s.cfg.Kafka.Brokers...),
 		kgo.ConsumeTopics(s.cfg.Kafka.Topics...),
-		kgo.ConsumerGroup(s.name),
+		kgo.ConsumerGroup(s.cfg.Name),
 		kgo.AutoCommitMarks(),
 	); err != nil {
 		return errors.Wrap(err, "init Kafka consumer group")

@@ -4,12 +4,14 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/dgraph-io/badger/v4"
 	"github.com/pkg/errors"
 	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
-	Pg struct {
+	Name string `yaml:"name"`
+	Pg   struct {
 		SkipDelete  bool     `yaml:"skip.delete"`
 		Url         string   `yaml:"url"`
 		Publication string   `yaml:"publication"`
@@ -31,6 +33,7 @@ type Config struct {
 			Timeout time.Duration `yaml:"timeout"`
 		} `yaml:"batch"`
 	} `yaml:"kafka"`
+	Storage *badger.DB `yaml:"-"`
 }
 
 func (c *Config) Parse(src []byte) error {

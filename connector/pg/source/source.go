@@ -22,18 +22,15 @@ import (
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 
-	"kafka-pipe/connector"
 	"kafka-pipe/connector/pg"
 )
 
 const Plugin = "pgoutput"
 
 type Source struct {
-	name      string
 	cfg       Config
 	pgCfg     pgxpool.Config
 	wg        sync.WaitGroup
-	stor      *badger.DB
 	kafka     *kgo.Client
 	replConn  *pgconn.PgConn
 	db        *pgxpool.Pool
@@ -50,21 +47,15 @@ type Event struct {
 	Data       map[string]any
 }
 
-func NewSource(config connector.Config) (*Source, error) {
-	var cfg Config
-	if err := cfg.Parse(config.Raw); err != nil {
-		return nil, err
-	}
+func NewSource(cfg Config) (*Source, error) {
 	pgCfg, err := pgxpool.ParseConfig(cfg.Pg.Url)
 	if err != nil {
 		return nil, errors.Wrap(err, "parse PostgreSQL connection URL")
 	}
 
 	s := &Source{
-		name:      config.Name,
 		cfg:       cfg,
 		pgCfg:     *pgCfg,
-		stor:      config.Storage,
 		relations: make(map[uint32]*pglogrepl.RelationMessage),
 		typeMap:   pgtype.NewMap(),
 		events:    make(chan Event),
@@ -180,7 +171,7 @@ func (s *Source) startReplication(ctx context.Context) error {
 	}
 
 	// Get last committed LSN
-	if err := s.stor.View(func(tx *badger.Txn) error {
+	if err := s.cfg.Storage.View(func(tx *badger.Txn) error {
 		item, err := tx.Get(s.lsnKey())
 		if err != nil {
 			return err
@@ -468,7 +459,7 @@ func (s *Source) produceEvents() error {
 		}
 
 		if latestLSN != 0 {
-			if err := s.stor.Update(func(tx *badger.Txn) error {
+			if err := s.cfg.Storage.Update(func(tx *badger.Txn) error {
 				return tx.Set(s.lsnKey(), []byte(latestLSN.String()))
 			}); err != nil {
 				return err
@@ -490,5 +481,5 @@ func (s *Source) lsnHook() zerolog.HookFunc {
 }
 
 func (s *Source) lsnKey() []byte {
-	return []byte(s.name + "/lsn")
+	return []byte(s.cfg.Name + "/lsn")
 }

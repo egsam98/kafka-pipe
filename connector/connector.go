@@ -14,7 +14,6 @@ type Connector interface {
 type Init func(cfg Config) (Connector, error)
 
 type Config struct {
-	Name    string
 	Raw     []byte
 	Storage *badger.DB
 }

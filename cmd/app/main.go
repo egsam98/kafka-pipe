@@ -35,26 +35,24 @@ func main() {
 	}
 }
 
-type Config struct {
-	Log struct {
+type PreConfig struct {
+	Name  string `yaml:"name"`
+	Class string `yaml:"class"`
+	Log   struct {
 		Pretty bool          `yaml:"pretty"`
 		Level  zerolog.Level `yaml:"level"`
 	} `yaml:"log"`
-	Connector struct {
-		Name  string `yaml:"name"`
-		Class string `yaml:"class"`
-	} `yaml:"connector"`
 }
 
-func (c *Config) Parse(src []byte) error {
+func (c *PreConfig) Parse(src []byte) error {
 	if err := yaml.Unmarshal(src, c); err != nil {
 		return errors.Wrap(err, "decode config class")
 	}
-	if c.Connector.Name == "" {
-		return errors.New(`"connector.name" parameter is required`)
+	if c.Name == "" {
+		return errors.New(`"name" parameter is required`)
 	}
-	if c.Connector.Class == "" {
-		return errors.New(`"connector.class" parameter is required`)
+	if c.Class == "" {
+		return errors.New(`"class" parameter is required`)
 	}
 	return nil
 }
@@ -64,13 +62,13 @@ func run() error {
 		return errors.New("YAML config is required as argument")
 	}
 
-	data, err := os.ReadFile(os.Args[1])
+	raw, err := os.ReadFile(os.Args[1])
 	if err != nil {
 		return errors.Wrap(err, "open config")
 	}
 
-	var cfg Config
-	if err := cfg.Parse(data); err != nil {
+	var cfg PreConfig
+	if err := cfg.Parse(raw); err != nil {
 		return err
 	}
 
@@ -91,9 +89,8 @@ func run() error {
 		return errors.Wrapf(err, "open Badger %q", DataFolder)
 	}
 
-	conn, err := connector.Get(cfg.Connector.Class, connector.Config{
-		Name:    cfg.Connector.Name,
-		Raw:     data,
+	conn, err := connector.Get(cfg.Class, connector.Config{
+		Raw:     raw,
 		Storage: stor,
 	})
 	if err != nil {
@@ -105,7 +102,7 @@ func run() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	log.Info().Str("name", cfg.Connector.Name).Str("class", cfg.Connector.Class).Msg("Run connector")
+	log.Info().Str("name", cfg.Name).Str("class", cfg.Class).Msg("Run connector")
 	if err := conn.Run(ctx); err != nil {
 		return err
 	}

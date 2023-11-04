@@ -18,7 +18,6 @@ import (
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 
-	"kafka-pipe/connector"
 	"kafka-pipe/connector/pg"
 )
 
@@ -29,11 +28,7 @@ type Snapshot struct {
 	kafka *kgo.Client
 }
 
-func NewSnapshot(config connector.Config) (*Snapshot, error) {
-	var cfg Config
-	if err := cfg.Parse(config.Raw); err != nil {
-		return nil, err
-	}
+func NewSnapshot(cfg Config) (*Snapshot, error) {
 	pgCfg, err := pgxpool.ParseConfig(cfg.Pg.Url)
 	if err != nil {
 		return nil, errors.Wrap(err, "parse PostgreSQL connection URL")
