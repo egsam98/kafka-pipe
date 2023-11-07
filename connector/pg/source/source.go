@@ -454,6 +454,7 @@ func (s *Source) produceEvents() error {
 				return errors.Wrap(err, "produce to Kafka")
 			}
 			s.log.Info().Int("count", len(batch)).Msg("Kafka: Events have been published")
+			clear(batch)
 			batch = batch[:0]
 		}
 
