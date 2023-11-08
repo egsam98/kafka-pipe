@@ -103,7 +103,6 @@ func (s *Source) Run(ctx context.Context) error {
 	s.wg.Add(3)
 	go s.healthPg(ctx)
 	go s.listenPgRepl(ctx)
-	go s.healthKafka(ctx)
 
 	if err := s.produceEvents(); err != nil {
 		return err
@@ -196,21 +195,6 @@ func (s *Source) startReplication(ctx context.Context) error {
 		Mode: pglogrepl.LogicalReplication,
 	})
 	return errors.Wrap(err, "start logical replication")
-}
-
-func (s *Source) healthKafka(ctx context.Context) {
-	defer s.wg.Done()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(10 * time.Second):
-			if err := s.kafka.Ping(ctx); err != nil {
-				s.log.Err(err).Msgf("Kafka: Health check")
-			}
-		}
-	}
 }
 
 func (s *Source) healthPg(ctx context.Context) {
@@ -449,10 +433,20 @@ func (s *Source) produceEvents() error {
 		}
 
 		if len(batch) > 0 {
-			// Block until all messages are delivered to brokers
-			if err := s.kafka.ProduceSync(context.Background(), batch...).FirstErr(); err != nil {
-				return errors.Wrap(err, "produce to Kafka")
+			for {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				err := s.kafka.ProduceSync(ctx, batch...).FirstErr()
+				cancel()
+
+				if err == nil {
+					break
+				}
+				if !errors.Is(err, context.DeadlineExceeded) {
+					return errors.Wrap(err, "produce to Kafka")
+				}
+				s.log.Err(err).Msgf("Kafka: Failed to produce a batch")
 			}
+
 			s.log.Info().Int("count", len(batch)).Msg("Kafka: Events have been published")
 			clear(batch)
 			batch = batch[:0]
