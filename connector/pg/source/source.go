@@ -26,6 +26,7 @@ import (
 )
 
 const Plugin = "pgoutput"
+const KafkaProduceBatchTimeout = time.Minute
 
 type Source struct {
 	cfg       Config
@@ -434,7 +435,7 @@ func (s *Source) produceEvents() error {
 
 		if len(batch) > 0 {
 			for {
-				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				ctx, cancel := context.WithTimeout(context.Background(), KafkaProduceBatchTimeout)
 				err := s.kafka.ProduceSync(ctx, batch...).FirstErr()
 				cancel()
 
@@ -444,7 +445,10 @@ func (s *Source) produceEvents() error {
 				if !errors.Is(err, context.DeadlineExceeded) {
 					return errors.Wrap(err, "produce to Kafka")
 				}
-				s.log.Err(err).Msgf("Kafka: Failed to produce a batch")
+				s.log.Err(err).
+					Int("batch_size", len(batch)).
+					Dur("batch_timeout", KafkaProduceBatchTimeout).
+					Msgf("Kafka: Failed to produce a batch")
 			}
 
 			s.log.Info().Int("count", len(batch)).Msg("Kafka: Events have been published")
