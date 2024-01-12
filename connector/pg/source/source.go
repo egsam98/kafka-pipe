@@ -23,28 +23,30 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 
 	"kafka-pipe/connector/pg"
+	"kafka-pipe/internal/set"
 )
 
 const Plugin = "pgoutput"
 const KafkaProduceBatchTimeout = time.Minute
 
 type Source struct {
-	cfg       Config
-	pgCfg     pgxpool.Config
-	wg        sync.WaitGroup
-	kafka     *kgo.Client
-	replConn  *pgconn.PgConn
-	db        *pgxpool.Pool
-	relations map[uint32]*pglogrepl.RelationMessage
-	typeMap   *pgtype.Map
-	lsn       pglogrepl.LSN
-	events    chan Event
-	log       zerolog.Logger
+	cfg           Config
+	pgCfg         pgxpool.Config
+	wg            sync.WaitGroup
+	kafka         *kgo.Client
+	replConn      *pgconn.PgConn
+	db            *pgxpool.Pool
+	relations     map[uint32]*pglogrepl.RelationMessage
+	typeMap       *pgtype.Map
+	lsn           pglogrepl.LSN
+	events        chan Event
+	log           zerolog.Logger
+	topicResolver topicResolver
 }
 
 type Event struct {
 	Start, End pglogrepl.LSN
-	Table      string
+	Relation   string
 	Data       map[string]any
 }
 
@@ -64,6 +66,11 @@ func NewSource(cfg Config) *Source {
 }
 
 func (s *Source) Run(ctx context.Context) error {
+	var err error
+	if s.topicResolver, err = newTopicResolver(&s.cfg); err != nil {
+		return err
+	}
+
 	pgCfg, err := pgxpool.ParseConfig(s.cfg.Pg.Url)
 	if err != nil {
 		return errors.Wrap(err, "parse PostgreSQL connection URL")
@@ -290,19 +297,19 @@ func (s *Source) recvEvent(ctx context.Context) error {
 		Msgf("PostgreSQL: Received message %T", xldData)
 
 	var (
-		data  map[string]any
-		table string
+		data     map[string]any
+		relation string
 	)
 	switch xldData := xldData.(type) {
 	case *pglogrepl.RelationMessage:
 		s.relations[xldData.RelationID] = xldData
 	case *pglogrepl.InsertMessage:
-		table, data, err = s.newEventData(xldData.RelationID, xldData.Tuple.Columns)
+		relation, data, err = s.newEventData(xldData.RelationID, xldData.Tuple.Columns)
 	case *pglogrepl.UpdateMessage:
-		table, data, err = s.newEventData(xldData.RelationID, xldData.NewTuple.Columns)
+		relation, data, err = s.newEventData(xldData.RelationID, xldData.NewTuple.Columns)
 	case *pglogrepl.DeleteMessage:
 		if !s.cfg.Pg.SkipDelete {
-			table, data, err = s.newEventData(xldData.RelationID, xldData.OldTuple.Columns)
+			relation, data, err = s.newEventData(xldData.RelationID, xldData.OldTuple.Columns)
 		}
 	}
 	if err != nil {
@@ -310,10 +317,10 @@ func (s *Source) recvEvent(ctx context.Context) error {
 	}
 
 	event := Event{
-		Start: xld.WALStart,
-		End:   xld.WALStart + pglogrepl.LSN(len(xld.WALData)),
-		Table: table,
-		Data:  data,
+		Start:    xld.WALStart,
+		End:      xld.WALStart + pglogrepl.LSN(len(xld.WALData)),
+		Relation: relation,
+		Data:     data,
 	}
 
 	select {
@@ -397,7 +404,7 @@ func (s *Source) produceEvents() error {
 			}
 
 			batch = append(batch, &kgo.Record{
-				Topic: s.cfg.Kafka.Topic.Prefix + "." + event.Table,
+				Topic: s.topicResolver.resolve(event.Relation),
 				Key:   key,
 				Value: value,
 				Headers: []kgo.RecordHeader{
@@ -422,8 +429,8 @@ func (s *Source) produceEvents() error {
 						Value: []byte(s.pgCfg.ConnConfig.Database),
 					},
 					{
-						Key:   "table",
-						Value: []byte(event.Table),
+						Key:   "relation",
+						Value: []byte(event.Relation),
 					},
 				},
 			})
@@ -442,13 +449,21 @@ func (s *Source) produceEvents() error {
 				if err == nil {
 					break
 				}
-				if !errors.Is(err, context.DeadlineExceeded) {
-					return errors.Wrap(err, "produce to Kafka")
+				if errors.Is(err, context.DeadlineExceeded) {
+					s.log.Err(err).
+						Int("batch_size", len(batch)).
+						Dur("batch_timeout", KafkaProduceBatchTimeout).
+						Msgf("Kafka: Failed to produce a batch")
+					continue
 				}
-				s.log.Err(err).
-					Int("batch_size", len(batch)).
-					Dur("batch_timeout", KafkaProduceBatchTimeout).
-					Msgf("Kafka: Failed to produce a batch")
+				if errors.Is(err, kerr.UnknownTopicOrPartition) {
+					topics := set.NewSet[string]()
+					for _, rec := range batch {
+						topics.Add(rec.Topic)
+					}
+					return errors.Wrapf(err, "topics=%v", topics.Slice())
+				}
+				return errors.Wrap(err, "produce to Kafka")
 			}
 
 			s.log.Info().Int("count", len(batch)).Msg("Kafka: Events have been published")

@@ -22,11 +22,12 @@ type Config struct {
 	Kafka struct {
 		Brokers []string `yaml:"brokers"`
 		Topic   struct {
-			Prefix            string `yaml:"prefix"`
-			ReplicationFactor int16  `yaml:"replication.factor"`
-			Partitions        int32  `yaml:"partitions"`
-			CleanupPolicy     string `yaml:"cleanup.policy"`
-			CompressionType   string `yaml:"compression.type"`
+			Prefix            string            `yaml:"prefix"`
+			ReplicationFactor int16             `yaml:"replication.factor"`
+			Partitions        int32             `yaml:"partitions"`
+			CleanupPolicy     string            `yaml:"cleanup.policy"`
+			CompressionType   string            `yaml:"compression.type"`
+			Routes            map[string]string `yaml:"routes"`
 		} `yaml:"topic"`
 		Batch struct {
 			Size    int           `yaml:"size"`
