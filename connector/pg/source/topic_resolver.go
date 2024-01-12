@@ -44,7 +44,10 @@ func (t *topicResolver) resolve(rel string) (topic string) {
 
 	defer func() { t.cache[rel] = topic }()
 
-	prefix := t.cfg.Kafka.Topic.Prefix + "."
+	prefix := t.cfg.Kafka.Topic.Prefix
+	if prefix != "" {
+		prefix += "."
+	}
 	for _, reg := range t.regs {
 		if reg.MatchString(rel) {
 			return prefix + strings.TrimPrefix(reg.topic, prefix)

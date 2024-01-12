@@ -32,7 +32,7 @@ Config parameters
 | pg:tables                      | +        | Tables list to subscribe for replication                            |
 | pg:health.table                |          | Table name. Default is `public.pipe_health`                         |
 | kafka:brokers                  | +        | List of Kafka brokers. Format is {hostname}:{port}                  |
-| kafka:topic:prefix             | +        | Prefix for created topics. Format is {prefix}.{postgres table name} |
+| kafka:topic:prefix             |          | Prefix for created topics. Format is {prefix}.{postgres table name} |
 | kafka:topic:replication.factor |          | Topic replication factor. Default is `1`                            |
 | kafka:topic:partitions         |          | Number of partitions. Default is `1`                                |
 | kafka:topic:compression.type   |          | Compression type. Default is `producer`                             |

@@ -67,9 +67,6 @@ func (c *Config) Parse(src []byte) error {
 	if len(c.Kafka.Brokers) == 0 {
 		return errors.New(`"kafka.brokers" list is required`)
 	}
-	if c.Kafka.Topic.Prefix == "" {
-		return errors.New(`"kafka.topic.prefix" is required`)
-	}
 	if c.Kafka.Topic.ReplicationFactor == 0 {
 		c.Kafka.Topic.ReplicationFactor = 1
 	}

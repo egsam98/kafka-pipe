@@ -32,14 +32,12 @@ const KafkaProduceBatchTimeout = time.Minute
 type Source struct {
 	cfg           Config
 	pgCfg         pgxpool.Config
-	wg            sync.WaitGroup
 	kafka         *kgo.Client
 	replConn      *pgconn.PgConn
 	db            *pgxpool.Pool
 	relations     map[uint32]*pglogrepl.RelationMessage
 	typeMap       *pgtype.Map
 	lsn           pglogrepl.LSN
-	events        chan Event
 	log           zerolog.Logger
 	topicResolver topicResolver
 }
@@ -55,7 +53,6 @@ func NewSource(cfg Config) *Source {
 		cfg:       cfg,
 		relations: make(map[uint32]*pglogrepl.RelationMessage),
 		typeMap:   pgtype.NewMap(),
-		events:    make(chan Event),
 	}
 	pg.RegisterTypes(s.typeMap)
 	s.log = log.Logger.
@@ -90,7 +87,7 @@ func (s *Source) Run(ctx context.Context) error {
 	kafkaAdmin := kadm.NewClient(s.kafka)
 	// Create topics if not exists
 	for _, table := range s.cfg.Pg.Tables {
-		topic := s.cfg.Kafka.Topic.Prefix + "." + table
+		topic := s.topicResolver.resolve(table)
 		res, err := kafkaAdmin.CreateTopic(ctx, s.cfg.Kafka.Topic.Partitions, s.cfg.Kafka.Topic.ReplicationFactor, map[string]*string{
 			"compression.type": &s.cfg.Kafka.Topic.CompressionType,
 			"cleanup.policy":   &s.cfg.Kafka.Topic.CleanupPolicy,
@@ -108,16 +105,18 @@ func (s *Source) Run(ctx context.Context) error {
 		return err
 	}
 
-	s.wg.Add(3)
-	go s.healthPg(ctx)
-	go s.listenPgRepl(ctx)
+	events := make(chan Event)
+	var wg sync.WaitGroup
 
-	if err := s.produceEvents(); err != nil {
+	wg.Add(2)
+	go s.healthPg(ctx, &wg)
+	go s.listenPgRepl(ctx, events, &wg)
+	if err := s.produceEvents(events); err != nil {
 		return err
 	}
 
 	// Shutdown
-	s.wg.Wait()
+	wg.Wait()
 
 	s.log.Info().Msg("PostgreSQL: Close")
 	s.db.Close()
@@ -205,8 +204,8 @@ func (s *Source) startReplication(ctx context.Context) error {
 	return errors.Wrap(err, "start logical replication")
 }
 
-func (s *Source) healthPg(ctx context.Context) {
-	defer s.wg.Done()
+func (s *Source) healthPg(ctx context.Context, wg *sync.WaitGroup) {
+	defer wg.Done()
 
 	for {
 		select {
@@ -231,12 +230,12 @@ func (s *Source) healthPg(ctx context.Context) {
 	}
 }
 
-func (s *Source) listenPgRepl(ctx context.Context) {
-	defer s.wg.Done()
-	defer close(s.events)
+func (s *Source) listenPgRepl(ctx context.Context, events chan<- Event, wg *sync.WaitGroup) {
+	defer wg.Done()
+	defer close(events)
 
 	for {
-		err := s.recvEvent(ctx)
+		err := s.recvEvent(ctx, events)
 		if err == nil {
 			continue
 		}
@@ -262,7 +261,7 @@ func (s *Source) listenPgRepl(ctx context.Context) {
 	}
 }
 
-func (s *Source) recvEvent(ctx context.Context) error {
+func (s *Source) recvEvent(ctx context.Context, events chan<- Event) error {
 	msg, err := s.replConn.ReceiveMessage(ctx)
 	if err != nil {
 		if pgconn.Timeout(err) {
@@ -326,7 +325,7 @@ func (s *Source) recvEvent(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case s.events <- event:
+	case events <- event:
 		return nil
 	}
 }
@@ -375,7 +374,7 @@ func (s *Source) newEventData(relationID uint32, cols []*pglogrepl.TupleDataColu
 	return table, data, nil
 }
 
-func (s *Source) produceEvents() error {
+func (s *Source) produceEvents(events <-chan Event) error {
 	batch := make([]*kgo.Record, 0, s.cfg.Kafka.Batch.Size)
 	var latestLSN pglogrepl.LSN
 	ticker := time.NewTicker(s.cfg.Kafka.Batch.Timeout)
@@ -384,7 +383,7 @@ func (s *Source) produceEvents() error {
 	for {
 		select {
 		case <-ticker.C:
-		case event, ok := <-s.events:
+		case event, ok := <-events:
 			if !ok {
 				return nil
 			}
