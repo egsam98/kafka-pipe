@@ -42,7 +42,7 @@ type Source struct {
 	topicResolver topicResolver
 }
 
-type Event struct {
+type WALMessage struct {
 	Start, End pglogrepl.LSN
 	Relation   string
 	Data       map[string]any
@@ -105,13 +105,13 @@ func (s *Source) Run(ctx context.Context) error {
 		return err
 	}
 
-	events := make(chan Event)
+	msgs := make(chan WALMessage)
 	var wg sync.WaitGroup
 
 	wg.Add(2)
 	go s.healthPg(ctx, &wg)
-	go s.listenPgRepl(ctx, events, &wg)
-	if err := s.produceEvents(events); err != nil {
+	go s.listenPgRepl(ctx, msgs, &wg)
+	if err := s.produceMessages(msgs); err != nil {
 		return err
 	}
 
@@ -204,6 +204,7 @@ func (s *Source) startReplication(ctx context.Context) error {
 	return errors.Wrap(err, "start logical replication")
 }
 
+// healthPg sends health check status to postgres table and replication slot with the latest WAL position
 func (s *Source) healthPg(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 
@@ -215,6 +216,7 @@ func (s *Source) healthPg(ctx context.Context, wg *sync.WaitGroup) {
 			if s.replConn.IsClosed() {
 				continue
 			}
+
 			err := pglogrepl.SendStandbyStatusUpdate(ctx, s.replConn, pglogrepl.StandbyStatusUpdate{WALWritePosition: s.lsn})
 			if err != nil {
 				s.log.Err(err).Msg("PostgreSQL: SendStandbyStatusUpdate")
@@ -230,12 +232,13 @@ func (s *Source) healthPg(ctx context.Context, wg *sync.WaitGroup) {
 	}
 }
 
-func (s *Source) listenPgRepl(ctx context.Context, events chan<- Event, wg *sync.WaitGroup) {
+// listenPgRepl listens publication messages from pg replication slot and writes to channel
+func (s *Source) listenPgRepl(ctx context.Context, msgs chan<- WALMessage, wg *sync.WaitGroup) {
 	defer wg.Done()
-	defer close(events)
+	defer close(msgs)
 
 	for {
-		err := s.recvEvent(ctx, events)
+		err := s.recvMessage(ctx, msgs)
 		if err == nil {
 			continue
 		}
@@ -261,7 +264,8 @@ func (s *Source) listenPgRepl(ctx context.Context, events chan<- Event, wg *sync
 	}
 }
 
-func (s *Source) recvEvent(ctx context.Context, events chan<- Event) error {
+// recvMessage receives message from pg slot and writes to channel
+func (s *Source) recvMessage(ctx context.Context, msgs chan<- WALMessage) error {
 	msg, err := s.replConn.ReceiveMessage(ctx)
 	if err != nil {
 		if pgconn.Timeout(err) {
@@ -303,34 +307,33 @@ func (s *Source) recvEvent(ctx context.Context, events chan<- Event) error {
 	case *pglogrepl.RelationMessage:
 		s.relations[xldData.RelationID] = xldData
 	case *pglogrepl.InsertMessage:
-		relation, data, err = s.newEventData(xldData.RelationID, xldData.Tuple.Columns)
+		relation, data, err = s.messageData(xldData.RelationID, xldData.Tuple.Columns)
 	case *pglogrepl.UpdateMessage:
-		relation, data, err = s.newEventData(xldData.RelationID, xldData.NewTuple.Columns)
+		relation, data, err = s.messageData(xldData.RelationID, xldData.NewTuple.Columns)
 	case *pglogrepl.DeleteMessage:
 		if !s.cfg.Pg.SkipDelete {
-			relation, data, err = s.newEventData(xldData.RelationID, xldData.OldTuple.Columns)
+			relation, data, err = s.messageData(xldData.RelationID, xldData.OldTuple.Columns)
 		}
 	}
 	if err != nil {
 		return err
 	}
 
-	event := Event{
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case msgs <- WALMessage{
 		Start:    xld.WALStart,
 		End:      xld.WALStart + pglogrepl.LSN(len(xld.WALData)),
 		Relation: relation,
 		Data:     data,
-	}
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case events <- event:
+	}:
 		return nil
 	}
 }
 
-func (s *Source) newEventData(relationID uint32, cols []*pglogrepl.TupleDataColumn) (string, map[string]any, error) {
+// messageData returns relation name (schema/namespace is included) and row data
+func (s *Source) messageData(relationID uint32, cols []*pglogrepl.TupleDataColumn) (string, map[string]any, error) {
 	rel, ok := s.relations[relationID]
 	if !ok {
 		return "", nil, errors.Errorf("unknown relation ID=%d", relationID)
@@ -338,7 +341,7 @@ func (s *Source) newEventData(relationID uint32, cols []*pglogrepl.TupleDataColu
 
 	table := rel.Namespace + "." + rel.RelationName
 	// Skip health check table
-	if table == s.cfg.Pg.HealthTable {
+	if strings.HasSuffix(table, s.cfg.Pg.HealthTable) {
 		return "", nil, nil
 	}
 
@@ -374,42 +377,44 @@ func (s *Source) newEventData(relationID uint32, cols []*pglogrepl.TupleDataColu
 	return table, data, nil
 }
 
-func (s *Source) produceEvents(events <-chan Event) error {
+// produceMessages collects WAL messages into batch and produces to Kafka
+func (s *Source) produceMessages(msgs <-chan WALMessage) error {
 	batch := make([]*kgo.Record, 0, s.cfg.Kafka.Batch.Size)
 	var latestLSN pglogrepl.LSN
 	ticker := time.NewTicker(s.cfg.Kafka.Batch.Timeout)
 	defer ticker.Stop()
 
 	for {
+		// Collect messages into batch
 		select {
 		case <-ticker.C:
-		case event, ok := <-events:
+		case msg, ok := <-msgs:
 			if !ok {
 				return nil
 			}
-			latestLSN = event.End
-			if event.Data == nil {
+			latestLSN = msg.End
+			if msg.Data == nil {
 				continue
 			}
 
-			value, err := json.Marshal(event.Data)
+			value, err := json.Marshal(msg.Data)
 			if err != nil {
-				return errors.Wrapf(err, "marshal event data: %+v", event.Data)
+				return errors.Wrapf(err, "marshal WAL message data: %+v", msg.Data)
 			}
 
-			key, err := pg.KafkaKey(event.Data)
+			key, err := pg.KafkaKey(msg.Data)
 			if err != nil {
 				return err
 			}
 
 			batch = append(batch, &kgo.Record{
-				Topic: s.topicResolver.resolve(event.Relation),
+				Topic: s.topicResolver.resolve(msg.Relation),
 				Key:   key,
 				Value: value,
 				Headers: []kgo.RecordHeader{
 					{
 						Key:   "lsn",
-						Value: []byte(event.Start.String()),
+						Value: []byte(msg.Start.String()),
 					},
 					{
 						Key:   "ts_ms",
@@ -429,7 +434,7 @@ func (s *Source) produceEvents(events <-chan Event) error {
 					},
 					{
 						Key:   "relation",
-						Value: []byte(event.Relation),
+						Value: []byte(msg.Relation),
 					},
 				},
 			})
@@ -439,6 +444,7 @@ func (s *Source) produceEvents(events <-chan Event) error {
 			}
 		}
 
+		// Produce batch to Kafka
 		if len(batch) > 0 {
 			for {
 				ctx, cancel := context.WithTimeout(context.Background(), KafkaProduceBatchTimeout)
@@ -465,11 +471,12 @@ func (s *Source) produceEvents(events <-chan Event) error {
 				return errors.Wrap(err, "produce to Kafka")
 			}
 
-			s.log.Info().Int("count", len(batch)).Msg("Kafka: Events have been published")
+			s.log.Info().Int("count", len(batch)).Msg("Kafka: Messages have been published")
 			clear(batch)
 			batch = batch[:0]
 		}
 
+		// Update LSN to Badger storage
 		if latestLSN != 0 {
 			if err := s.cfg.Storage.Update(func(tx *badger.Txn) error {
 				return tx.Set(s.lsnKey(), []byte(latestLSN.String()))
@@ -483,6 +490,7 @@ func (s *Source) produceEvents(events <-chan Event) error {
 	}
 }
 
+// lsnHook appends current WAL LSN position to log messages
 func (s *Source) lsnHook() zerolog.HookFunc {
 	return func(e *zerolog.Event, _ zerolog.Level, _ string) {
 		if s.lsn == 0 {
@@ -492,6 +500,7 @@ func (s *Source) lsnHook() zerolog.HookFunc {
 	}
 }
 
+// lsnKey for badger storage
 func (s *Source) lsnKey() []byte {
 	return []byte(s.cfg.Name + "/lsn")
 }
