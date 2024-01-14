@@ -7,51 +7,53 @@ import (
 	"github.com/pkg/errors"
 )
 
+// topicResolver resolves Kafka topic name by Postgres relation regular expressions
 type topicResolver struct {
-	cfg   *Config
-	regs  []regex
-	cache map[string]string
+	cfg    *Config
+	routes []relationTopic
+	cache  map[string]string // map[pg relation]kafka topic
 }
 
-type regex struct {
-	regexp.Regexp
-	topic string
+type relationTopic struct {
+	pgRelation regexp.Regexp
+	kafkaTopic string
 }
 
 func newTopicResolver(cfg *Config) (topicResolver, error) {
 	res := topicResolver{
-		cfg:   cfg,
-		regs:  make([]regex, 0, len(cfg.Kafka.Topic.Routes)),
-		cache: make(map[string]string),
+		cfg:    cfg,
+		routes: make([]relationTopic, 0, len(cfg.Kafka.Topic.Routes)),
+		cache:  make(map[string]string),
 	}
-	for expr, topic := range cfg.Kafka.Topic.Routes {
-		reg, err := regexp.Compile(expr)
+	for pgRel, topic := range cfg.Kafka.Topic.Routes {
+		reg, err := regexp.Compile(pgRel)
 		if err != nil {
-			return topicResolver{}, errors.WithStack(err)
+			return topicResolver{}, errors.Wrap(err, "parse Postgres relation regex")
 		}
-		res.regs = append(res.regs, regex{
-			Regexp: *reg,
-			topic:  topic,
+		res.routes = append(res.routes, relationTopic{
+			pgRelation: *reg,
+			kafkaTopic: topic,
 		})
 	}
 	return res, nil
 }
 
-func (t *topicResolver) resolve(rel string) (topic string) {
-	if topic, ok := t.cache[rel]; ok {
+// resolve Kafka topic by Postgres relation name
+func (t *topicResolver) resolve(pgRelation string) (topic string) {
+	if topic, ok := t.cache[pgRelation]; ok {
 		return topic
 	}
 
-	defer func() { t.cache[rel] = topic }()
+	defer func() { t.cache[pgRelation] = topic }()
 
 	prefix := t.cfg.Kafka.Topic.Prefix
 	if prefix != "" {
 		prefix += "."
 	}
-	for _, reg := range t.regs {
-		if reg.MatchString(rel) {
-			return prefix + strings.TrimPrefix(reg.topic, prefix)
+	for _, reg := range t.routes {
+		if reg.pgRelation.MatchString(pgRelation) {
+			return prefix + strings.TrimPrefix(reg.kafkaTopic, prefix)
 		}
 	}
-	return prefix + rel
+	return prefix + pgRelation
 }
