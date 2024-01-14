@@ -1,13 +1,13 @@
+# Install
+https://hub.docker.com/r/egsam98/kafka-pipe/tags
+
 # Supported classes:
 | Class                      | Source     | Sink  |
 |----------------------------|------------|-------|
 | [pg.Source](#pgsource)     | PostgreSQL | Kafka |
 | [pg.Snapshot](#pgsnapshot) | PostgreSQL | Kafka |
 | [s3.Sink](#s3sink)         | Kafka      | S3    |
-| [s3.Backup](#s3backup)     | S3         | Kafka | 
-
-# Install
-https://hub.docker.com/r/egsam98/kafka-pipe/tags
+| [s3.Backup](#s3backup)     | S3         | Kafka |
 
 # Overview
 To start application you need to pass YAML-based configuration.
