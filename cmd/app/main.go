@@ -25,6 +25,7 @@ import (
 	"kafka-pipe/internal/badgerx"
 )
 
+const HealthAddr = ":8081"
 const DataFolder = "data"
 
 func main() {
@@ -97,7 +98,7 @@ func run() error {
 		return err
 	}
 
-	go http.ListenAndServe(":8081", nil) //nolint:errcheck
+	go httpHealth()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -108,4 +109,14 @@ func run() error {
 	}
 	log.Info().Msg("Connector stopped")
 	return stor.Close()
+}
+
+func httpHealth() {
+	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, "OK")
+	})
+	if err := http.ListenAndServe(HealthAddr, nil); err != nil {
+		panic(err)
+	}
 }
