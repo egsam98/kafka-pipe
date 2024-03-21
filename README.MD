@@ -1,3 +1,5 @@
+![](/icon.png)
+
 # Install
 https://hub.docker.com/r/egsam98/kafka-pipe/tags
 
