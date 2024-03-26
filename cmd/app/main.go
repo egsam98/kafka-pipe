@@ -18,6 +18,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"kafka-pipe/connector"
+	_ "kafka-pipe/connector/ch/sink"
 	_ "kafka-pipe/connector/pg/snapshot"
 	_ "kafka-pipe/connector/pg/source"
 	_ "kafka-pipe/connector/s3/backup"

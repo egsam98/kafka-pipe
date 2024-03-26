@@ -3,6 +3,8 @@ package sink
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
@@ -58,6 +60,7 @@ func (s *Sink) Run(ctx context.Context) error {
 		return errors.Wrap(err, "ClickHouse: Ping")
 	}
 
+	log.Info().Msg("Kafka: Listening to topics...")
 	var wg sync.WaitGroup
 	for topic, kafka := range s.kafka {
 		wg.Add(1)
@@ -81,12 +84,22 @@ func (s *Sink) Run(ctx context.Context) error {
 }
 
 func (s *Sink) poll(ctx context.Context, topic string, kafka *kgo.Client) error {
-	fetches := kafka.PollRecords(ctx, 100)
+	// TODO fix
+	pollCtx, cancel := context.WithTimeout(ctx, s.cfg.Kafka.Batch.Timeout)
+	defer cancel()
+	fetches := kafka.PollRecords(pollCtx, s.cfg.Kafka.Batch.Size)
 	if err := fetches.Err(); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil
+		}
 		return errors.Wrap(err, "Kafka: Fetch error")
 	}
 
-	batch, err := s.chConn.PrepareBatch(ctx, `INSERT INTO `+topic)
+	_, table, ok := strings.Cut(topic, ".")
+	if !ok {
+		return errors.Errorf("expected topic format {schema}.{table}, got %q", topic)
+	}
+	batch, err := s.chConn.PrepareBatch(ctx, fmt.Sprintf(`INSERT INTO %s.%s`, s.cfg.ClickHouse.Database, table))
 	if err != nil {
 		return errors.Wrap(err, "ClickHouse: Prepare batch")
 	}
@@ -106,5 +119,6 @@ func (s *Sink) poll(ctx context.Context, topic string, kafka *kgo.Client) error 
 		return errors.Wrap(err, "ClickHouse: Send batch")
 	}
 	kafka.MarkCommitRecords(records...)
+	log.Info().Msgf("ClickHouse: batch (%d) is successfully sent", len(records))
 	return nil
 }

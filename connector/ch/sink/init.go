@@ -1,6 +1,8 @@
 package sink
 
-import "kafka-pipe/connector"
+import (
+	"kafka-pipe/connector"
+)
 
 func init() {
 	connector.Register("ch.Sink", func(config connector.Config) (connector.Connector, error) {
