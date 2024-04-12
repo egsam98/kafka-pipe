@@ -24,6 +24,7 @@ import (
 	_ "kafka-pipe/connector/s3/backup"
 	_ "kafka-pipe/connector/s3/sink"
 	"kafka-pipe/internal/badgerx"
+	"kafka-pipe/internal/validate"
 )
 
 const HealthAddr = ":8081"
@@ -38,8 +39,8 @@ func main() {
 }
 
 type PreConfig struct {
-	Name  string `yaml:"name"`
-	Class string `yaml:"class"`
+	Name  string `yaml:"name" validate:"required"`
+	Class string `yaml:"class" validate:"required"`
 	Log   struct {
 		Pretty bool          `yaml:"pretty"`
 		Level  zerolog.Level `yaml:"level"`
@@ -50,13 +51,7 @@ func (c *PreConfig) Parse(src []byte) error {
 	if err := yaml.Unmarshal(src, c); err != nil {
 		return errors.Wrap(err, "decode config class")
 	}
-	if c.Name == "" {
-		return errors.New(`"name" parameter is required`)
-	}
-	if c.Class == "" {
-		return errors.New(`"class" parameter is required`)
-	}
-	return nil
+	return validate.Struct(c)
 }
 
 func run() error {

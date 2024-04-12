@@ -7,20 +7,30 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-playground/locales/en"
+	ut "github.com/go-playground/universal-translator"
 	"github.com/go-playground/validator/v10"
+	entrans "github.com/go-playground/validator/v10/translations/en"
 	"github.com/pkg/errors"
 )
 
 var validate = validator.New(validator.WithRequiredStructEnabled())
+var trans ut.Translator
 
 func init() {
+	validate = validator.New(validator.WithRequiredStructEnabled())
 	validate.RegisterTagNameFunc(func(field reflect.StructField) string {
-		if tag, ok := field.Tag.Lookup("json"); ok {
+		if tag := field.Tag.Get("yaml"); tag != "-" {
 			return tag
 		}
-		return field.Tag.Get("yaml")
+		return ""
 	})
 	if err := validate.RegisterValidation("default", validateDefault); err != nil {
+		panic(err)
+	}
+
+	trans, _ = ut.New(en.New()).GetTranslator("en")
+	if err := entrans.RegisterDefaultTranslations(validate, trans); err != nil {
 		panic(err)
 	}
 }
@@ -32,12 +42,18 @@ func Struct(src any) error {
 		return err
 	}
 
-	errs := make([]string, len(vErrs))
-	for i, vErr := range vErrs {
-		_, fieldPath, _ := strings.Cut(vErr.Namespace(), ".")
-		errs[i] = fmt.Sprintf("failed validation %q for %q parameter", vErr.Tag(), fieldPath)
+	var buf strings.Builder
+	for i, fe := range vErrs {
+		if i > 0 {
+			buf.WriteString("; ")
+		}
+
+		_, pathPrefix, _ := strings.Cut(fe.Namespace(), ".")
+		pathPrefix = strings.ReplaceAll(strings.TrimSuffix(pathPrefix, fe.Field()), ".", ":")
+		buf.WriteString(pathPrefix)
+		buf.WriteString(fe.Translate(trans))
 	}
-	return errors.New(strings.Join(errs, "; "))
+	return errors.New(buf.String())
 }
 
 func validateDefault(fl validator.FieldLevel) bool {

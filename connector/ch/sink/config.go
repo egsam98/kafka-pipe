@@ -2,11 +2,6 @@ package sink
 
 import (
 	"time"
-
-	"github.com/pkg/errors"
-	"gopkg.in/yaml.v3"
-
-	"kafka-pipe/internal/validate"
 )
 
 type Config struct {
@@ -26,11 +21,4 @@ type Config struct {
 		Password string   `yaml:"password"`
 		Addrs    []string `yaml:"addrs" validate:"required"`
 	} `yaml:"click_house"`
-}
-
-func (c *Config) Parse(src []byte) error {
-	if err := yaml.Unmarshal(src, c); err != nil {
-		return errors.Wrap(err, "parse sink config")
-	}
-	return validate.Struct(c)
 }

@@ -13,6 +13,8 @@ import (
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
 	"github.com/twmb/franz-go/pkg/kgo"
+
+	"kafka-pipe/internal/validate"
 )
 
 type Sink struct {
@@ -30,6 +32,10 @@ func NewSink(cfg Config) *Sink {
 }
 
 func (s *Sink) Run(ctx context.Context) error {
+	if err := validate.Struct(&s.cfg); err != nil {
+		return err
+	}
+
 	var err error
 	// Init consumer group
 	for _, topic := range s.cfg.Kafka.Topics {
