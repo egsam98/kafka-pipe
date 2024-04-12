@@ -1,6 +1,6 @@
 module kafka-pipe
 
-go 1.21
+go 1.22
 
 require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.22.4

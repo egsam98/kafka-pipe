@@ -20,7 +20,7 @@ func init() {
 		}
 		return field.Tag.Get("yaml")
 	})
-	if err := validate.RegisterValidation("default", validationDefault); err != nil {
+	if err := validate.RegisterValidation("default", validateDefault); err != nil {
 		panic(err)
 	}
 }
@@ -40,8 +40,11 @@ func Struct(src any) error {
 	return errors.New(strings.Join(errs, "; "))
 }
 
-func validationDefault(fl validator.FieldLevel) bool {
+func validateDefault(fl validator.FieldLevel) bool {
 	field := fl.Field()
+	if !field.IsZero() {
+		return true
+	}
 
 	switch field.Interface().(type) {
 	case time.Duration:

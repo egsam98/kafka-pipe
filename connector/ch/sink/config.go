@@ -11,10 +11,11 @@ import (
 
 type Config struct {
 	Kafka struct {
-		GroupID string   `yaml:"group_id" validate:"required"`
-		Brokers []string `yaml:"brokers" validate:"required"`
-		Topics  []string `yaml:"topics" validate:"required"`
-		Batch   struct {
+		GroupID          string        `yaml:"group_id" validate:"required"`
+		Brokers          []string      `yaml:"brokers" validate:"required"`
+		Topics           []string      `yaml:"topics" validate:"required"`
+		RebalanceTimeout time.Duration `yaml:"rebalance_timeout" default:"1m"`
+		Batch            struct {
 			Size    int           `yaml:"size" validate:"default=10000"`
 			Timeout time.Duration `yaml:"timeout" validate:"default=5s"`
 		} `yaml:"batch"`

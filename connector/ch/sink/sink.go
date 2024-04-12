@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -15,6 +16,7 @@ import (
 )
 
 type Sink struct {
+	i      int // TODO temp
 	cfg    Config
 	kafka  map[string]*kgo.Client // Kafka client per topic
 	chConn driver.Conn
@@ -35,7 +37,10 @@ func (s *Sink) Run(ctx context.Context) error {
 			kgo.SeedBrokers(s.cfg.Kafka.Brokers...),
 			kgo.ConsumeTopics(topic),
 			kgo.ConsumerGroup(s.cfg.Kafka.GroupID),
+			kgo.BlockRebalanceOnPoll(),
+			kgo.RebalanceTimeout(s.cfg.Kafka.RebalanceTimeout),
 			kgo.AutoCommitMarks(),
+			kgo.WithLogger(kgo.BasicLogger(log.Logger, kgo.LogLevelInfo, nil)), // TODO
 		); err != nil {
 			return errors.Wrap(err, "Kafka: Init consumer group")
 		}
@@ -67,7 +72,10 @@ func (s *Sink) Run(ctx context.Context) error {
 		go func(topic string, kafka *kgo.Client) {
 			defer wg.Done()
 			for {
-				if err := s.poll(ctx, topic, kafka); err != nil {
+				if err := s.poll(ctx, kafka, topic); err != nil {
+					if errors.Is(err, context.Canceled) {
+						return
+					}
 					log.Error().Stack().Err(err).Msgf("Kafka: Poll topic %q", topic)
 				}
 			}
@@ -83,28 +91,74 @@ func (s *Sink) Run(ctx context.Context) error {
 	return s.chConn.Close()
 }
 
-func (s *Sink) poll(ctx context.Context, topic string, kafka *kgo.Client) error {
-	// TODO fix
-	pollCtx, cancel := context.WithTimeout(ctx, s.cfg.Kafka.Batch.Timeout)
-	defer cancel()
-	fetches := kafka.PollRecords(pollCtx, s.cfg.Kafka.Batch.Size)
-	if err := fetches.Err(); err != nil {
-		if errors.Is(err, context.DeadlineExceeded) {
-			return nil
-		}
-		return errors.Wrap(err, "Kafka: Fetch error")
-	}
-
+func (s *Sink) poll(ctx context.Context, kafka *kgo.Client, topic string) error {
+	// TODO rework
 	_, table, ok := strings.Cut(topic, ".")
 	if !ok {
 		return errors.Errorf("expected topic format {schema}.{table}, got %q", topic)
 	}
+
+	t := time.Now()
+
+	defer kafka.AllowRebalance()
+
+	var batch []*kgo.Record
+	pollCtx, cancel := context.WithTimeout(ctx, s.cfg.Kafka.Batch.Timeout)
+	defer cancel()
+	for len(batch) < s.cfg.Kafka.Batch.Size {
+		fetches := kafka.PollRecords(pollCtx, s.cfg.Kafka.Batch.Size-len(batch))
+		if err := fetches.Err(); err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				break
+			}
+			return errors.Wrap(err, "Kafka: Fetch error")
+		}
+		batch = append(batch, fetches.Records()...)
+	}
+	log.Info().Msgf("TIME %s BATCH %d", time.Since(t), len(batch)) // TODO
+
+	if len(batch) == 0 {
+		return nil
+	}
+
+	for {
+		err := s.writeToCH(ctx, table, batch)
+		if err == nil {
+			break
+		}
+
+		if !errors.Is(err, context.Canceled) {
+			log.Error().Stack().Err(err).Send()
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
+	}
+
+	kafka.MarkCommitRecords(batch...)
+	log.Info().Int("size", len(batch)).Msg("ClickHouse: batch is successfully sent")
+	return nil
+}
+
+func (s *Sink) writeToCH(ctx context.Context, table string, records []*kgo.Record) error {
+	// TODO
+	log.Info().Msg("PROCESS BATCH")
+	if s.i == 0 {
+		select {
+		case <-ctx.Done():
+		case <-time.After(20 * time.Second):
+		}
+	}
+	s.i++
+	return nil
+
 	batch, err := s.chConn.PrepareBatch(ctx, fmt.Sprintf(`INSERT INTO %s.%s`, s.cfg.ClickHouse.Database, table))
 	if err != nil {
 		return errors.Wrap(err, "ClickHouse: Prepare batch")
 	}
 
-	records := fetches.Records()
 	for _, rec := range records {
 		var value map[string]any
 		if err := json.Unmarshal(rec.Value, &value); err != nil {
@@ -115,10 +169,5 @@ func (s *Sink) poll(ctx context.Context, topic string, kafka *kgo.Client) error 
 		}
 	}
 
-	if err := batch.Send(); err != nil {
-		return errors.Wrap(err, "ClickHouse: Send batch")
-	}
-	kafka.MarkCommitRecords(records...)
-	log.Info().Msgf("ClickHouse: batch (%d) is successfully sent", len(records))
-	return nil
+	return errors.Wrap(batch.Send(), "ClickHouse: Send batch")
 }
