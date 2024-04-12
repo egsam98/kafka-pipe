@@ -19,6 +19,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 
 	"kafka-pipe/connector/pg"
+	"kafka-pipe/internal/validate"
 )
 
 type Snapshot struct {
@@ -33,6 +34,10 @@ func NewSnapshot(cfg Config) *Snapshot {
 }
 
 func (s *Snapshot) Run(ctx context.Context) error {
+	if err := validate.Struct(&s.cfg); err != nil {
+		return err
+	}
+
 	pgCfg, err := pgxpool.ParseConfig(s.cfg.Pg.Url)
 	if err != nil {
 		return errors.Wrap(err, "parse PostgreSQL connection URL")
@@ -59,7 +64,7 @@ func (s *Snapshot) Run(ctx context.Context) error {
 	kafkaAdmin := kadm.NewClient(s.kafka)
 	// Create topics if not exist
 	for _, table := range s.cfg.Pg.Tables {
-		topic := s.cfg.Kafka.Topic.Prefix + "." + table
+		topic := s.topic(table)
 		res, err := kafkaAdmin.CreateTopic(ctx, s.cfg.Kafka.Topic.Partitions, s.cfg.Kafka.Topic.ReplicationFactor, map[string]*string{
 			"compression.type": &s.cfg.Kafka.Topic.CompressionType,
 			"cleanup.policy":   &s.cfg.Kafka.Topic.CleanupPolicy,
@@ -139,7 +144,7 @@ func (s *Snapshot) query(ctx context.Context, table string) error {
 		s.kafka.Produce(ctx, &kgo.Record{
 			Key:   key,
 			Value: value,
-			Topic: s.cfg.Kafka.Topic.Prefix + "." + table,
+			Topic: s.topic(table),
 			Headers: []kgo.RecordHeader{
 				{
 					Key:   "ts_ms",
@@ -188,4 +193,12 @@ func (s *Snapshot) query(ctx context.Context, table string) error {
 	}
 	bar.Finish()
 	return nil
+}
+
+func (s *Snapshot) topic(pgTable string) string {
+	prefix := s.cfg.Kafka.Topic.Prefix
+	if prefix != "" {
+		prefix += "."
+	}
+	return prefix + pgTable
 }

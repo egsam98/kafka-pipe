@@ -1,14 +1,17 @@
 package snapshot
 
 import (
+	"github.com/pkg/errors"
+	"gopkg.in/yaml.v3"
+
 	"kafka-pipe/connector"
 )
 
 func init() {
 	connector.Register("pg.Snapshot", func(config connector.Config) (connector.Connector, error) {
 		var cfg Config
-		if err := cfg.Parse(config.Raw); err != nil {
-			return nil, err
+		if err := yaml.Unmarshal(config.Raw, &cfg); err != nil {
+			return nil, errors.Wrap(err, "parse snapshot config")
 		}
 		return NewSnapshot(cfg), nil
 	})
