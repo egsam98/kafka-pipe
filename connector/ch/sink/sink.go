@@ -46,7 +46,10 @@ func (s *Sink) Run(ctx context.Context) error {
 			kgo.BlockRebalanceOnPoll(),
 			kgo.RebalanceTimeout(s.cfg.Kafka.RebalanceTimeout),
 			kgo.AutoCommitMarks(),
-			kgo.WithLogger(kgo.BasicLogger(log.Logger, kgo.LogLevelInfo, nil)), // TODO
+			kgo.OnPartitionsAssigned(func(ctx context.Context, client *kgo.Client, m map[string][]int32) {
+				log.Info().Msg("PARTITION ASSIGNED")
+			}),
+			//kgo.WithLogger(kgo.BasicLogger(log.Logger, kgo.LogLevelInfo, nil)), // TODO
 		); err != nil {
 			return errors.Wrap(err, "Kafka: Init consumer group")
 		}
