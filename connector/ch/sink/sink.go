@@ -14,6 +14,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/twmb/franz-go/pkg/kgo"
 
+	"kafka-pipe/internal/kgox"
 	"kafka-pipe/internal/validate"
 )
 
@@ -47,9 +48,9 @@ func (s *Sink) Run(ctx context.Context) error {
 			kgo.RebalanceTimeout(s.cfg.Kafka.RebalanceTimeout),
 			kgo.AutoCommitMarks(),
 			kgo.OnPartitionsAssigned(func(ctx context.Context, client *kgo.Client, m map[string][]int32) {
-				log.Info().Msg("PARTITION ASSIGNED")
+				log.Info().Msgf("PARTITION ASSIGNED %v", m)
 			}),
-			//kgo.WithLogger(kgo.BasicLogger(log.Logger, kgo.LogLevelInfo, nil)), // TODO
+			kgo.WithLogger(&kgox.Logger{Logger: log.Logger}),
 		); err != nil {
 			return errors.Wrap(err, "Kafka: Init consumer group")
 		}
@@ -157,7 +158,7 @@ func (s *Sink) writeToCH(ctx context.Context, table string, records []*kgo.Recor
 	if s.i == 0 {
 		select {
 		case <-ctx.Done():
-		case <-time.After(20 * time.Second):
+		case <-time.After(60 * time.Second):
 		}
 	}
 	s.i++
