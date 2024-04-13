@@ -46,9 +46,12 @@ func (s *Sink) Run(ctx context.Context) error {
 			kgo.ConsumerGroup(s.cfg.Kafka.GroupID),
 			kgo.BlockRebalanceOnPoll(),
 			kgo.RebalanceTimeout(s.cfg.Kafka.RebalanceTimeout),
-			kgo.AutoCommitMarks(),
+			kgo.DisableAutoCommit(),
 			kgo.OnPartitionsAssigned(func(ctx context.Context, client *kgo.Client, m map[string][]int32) {
 				log.Info().Msgf("PARTITION ASSIGNED %v", m)
+			}),
+			kgo.OnPartitionsRevoked(func(ctx context.Context, client *kgo.Client, m map[string][]int32) {
+				log.Info().Msgf("PARTITION REVOKED %v", m)
 			}),
 			kgo.WithLogger(&kgox.Logger{Logger: log.Logger}),
 		); err != nil {
@@ -147,7 +150,9 @@ func (s *Sink) poll(ctx context.Context, kafka *kgo.Client, topic string) error 
 		}
 	}
 
-	kafka.MarkCommitRecords(batch...)
+	if err := kafka.CommitRecords(context.Background(), batch...); err != nil {
+		return errors.Wrapf(err, "Kafka: commit records")
+	}
 	log.Info().Int("size", len(batch)).Msg("ClickHouse: batch is successfully sent")
 	return nil
 }
@@ -155,10 +160,10 @@ func (s *Sink) poll(ctx context.Context, kafka *kgo.Client, topic string) error 
 func (s *Sink) writeToCH(ctx context.Context, table string, records []*kgo.Record) error {
 	// TODO
 	log.Info().Msg("PROCESS BATCH")
-	if s.i == 0 {
+	if s.i <= 500 {
 		select {
 		case <-ctx.Done():
-		case <-time.After(60 * time.Second):
+		case <-time.After(20 * time.Second):
 		}
 	}
 	s.i++

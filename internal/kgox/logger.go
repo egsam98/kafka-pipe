@@ -1,6 +1,8 @@
 package kgox
 
 import (
+	"slices"
+
 	"github.com/rs/zerolog"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
@@ -15,14 +17,12 @@ func (l *Logger) Level() kgo.LogLevel {
 }
 
 func (l *Logger) Log(level kgo.LogLevel, msg string, keyVals ...any) {
-	for i := 0; i < len(keyVals); i += 2 {
-		if keyVals[i] == "err" {
-			err := keyVals[i+1]
-			if l.prevErr == err {
-				return
-			}
-			l.prevErr = err
+	if idx := slices.Index(keyVals, "err"); idx != -1 {
+		err := keyVals[idx+1]
+		if l.prevErr == err {
+			return
 		}
+		l.prevErr = err
 	}
 	l.Logger.WithLevel(kgoLvls[level]).Fields(keyVals).Msg("Kafka: " + msg)
 }
