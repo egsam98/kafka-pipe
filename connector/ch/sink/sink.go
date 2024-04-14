@@ -19,17 +19,14 @@ import (
 )
 
 type Sink struct {
-	i      int // TODO temp
-	cfg    Config
-	kafka  map[string]*kgo.Client // Kafka client per topic
-	chConn driver.Conn
+	i         int // TODO temp
+	cfg       Config
+	consumers []consumer
+	chConn    driver.Conn
 }
 
 func NewSink(cfg Config) *Sink {
-	return &Sink{
-		cfg:   cfg,
-		kafka: make(map[string]*kgo.Client),
-	}
+	return &Sink{cfg: cfg}
 }
 
 func (s *Sink) Run(ctx context.Context) error {
@@ -37,31 +34,39 @@ func (s *Sink) Run(ctx context.Context) error {
 		return err
 	}
 
-	var err error
 	// Init consumer group
 	for _, topic := range s.cfg.Kafka.Topics {
-		if s.kafka[topic], err = kgo.NewClient(
-			kgo.SeedBrokers(s.cfg.Kafka.Brokers...),
-			kgo.ConsumeTopics(topic),
-			kgo.ConsumerGroup(s.cfg.Kafka.GroupID),
-			kgo.BlockRebalanceOnPoll(),
-			kgo.RebalanceTimeout(s.cfg.Kafka.RebalanceTimeout),
-			kgo.DisableAutoCommit(),
-			kgo.OnPartitionsAssigned(func(ctx context.Context, client *kgo.Client, m map[string][]int32) {
-				log.Info().Msgf("PARTITION ASSIGNED %v", m)
-			}),
-			kgo.OnPartitionsRevoked(func(ctx context.Context, client *kgo.Client, m map[string][]int32) {
-				log.Info().Msgf("PARTITION REVOKED %v", m)
-			}),
-			kgo.WithLogger(&kgox.Logger{Logger: log.Logger}),
-		); err != nil {
-			return errors.Wrap(err, "Kafka: Init consumer group")
-		}
-		if err := s.kafka[topic].Ping(ctx); err != nil {
-			return errors.Wrap(err, "Kafka: Ping brokers")
+		for range s.cfg.Kafka.WorkersPerTopic {
+			kafka, err := kgo.NewClient(
+				kgo.SeedBrokers(s.cfg.Kafka.Brokers...),
+				kgo.ConsumeTopics(topic),
+				kgo.ConsumerGroup(s.cfg.Kafka.GroupID+"-"+topic),
+				kgo.BlockRebalanceOnPoll(),
+				kgo.RebalanceTimeout(s.cfg.Kafka.RebalanceTimeout),
+				kgo.DisableAutoCommit(),
+				kgo.OnPartitionsAssigned(func(ctx context.Context, client *kgo.Client, m map[string][]int32) {
+					log.Info().Msgf("PARTITION ASSIGNED %v", m)
+				}),
+				kgo.OnPartitionsRevoked(func(ctx context.Context, client *kgo.Client, m map[string][]int32) {
+					log.Info().Msgf("PARTITION REVOKED %v", m)
+				}),
+				kgo.WithLogger(&kgox.Logger{Logger: log.Logger}),
+			)
+			if err != nil {
+				return errors.Wrap(err, "Kafka: Init consumer")
+			}
+			if err := kafka.Ping(ctx); err != nil {
+				return errors.Wrap(err, "Kafka: Ping brokers")
+			}
+
+			s.consumers = append(s.consumers, consumer{
+				Client: kafka,
+				Topic:  topic,
+			})
 		}
 	}
 
+	var err error
 	if s.chConn, err = clickhouse.Open(&clickhouse.Options{
 		Protocol: clickhouse.Native,
 		Addr:     s.cfg.ClickHouse.Addrs,
@@ -80,46 +85,46 @@ func (s *Sink) Run(ctx context.Context) error {
 
 	log.Info().Msg("Kafka: Listening to topics...")
 	var wg sync.WaitGroup
-	for topic, kafka := range s.kafka {
+	for _, consum := range s.consumers {
 		wg.Add(1)
-		go func(topic string, kafka *kgo.Client) {
+		go func(consum consumer) {
 			defer wg.Done()
 			for {
-				if err := s.poll(ctx, kafka, topic); err != nil {
+				if err := s.poll(ctx, &consum); err != nil {
 					if errors.Is(err, context.Canceled) {
 						return
 					}
-					log.Error().Stack().Err(err).Msgf("Kafka: Poll topic %q", topic)
+					log.Error().Stack().Err(err).Msgf("Kafka: Poll topic %q", consum.Topic)
 				}
 			}
-		}(topic, kafka)
+		}(consum)
 	}
 
 	wg.Wait()
 	log.Info().Msg("Kafka: Disconnect")
-	for _, kafka := range s.kafka {
-		kafka.Close()
+	for _, consum := range s.consumers {
+		consum.Close()
 	}
 	log.Info().Msg("ClickHouse: Disconnect")
 	return s.chConn.Close()
 }
 
-func (s *Sink) poll(ctx context.Context, kafka *kgo.Client, topic string) error {
+func (s *Sink) poll(ctx context.Context, consum *consumer) error {
 	// TODO rework
-	_, table, ok := strings.Cut(topic, ".")
+	_, table, ok := strings.Cut(consum.Topic, ".")
 	if !ok {
-		return errors.Errorf("expected topic format {schema}.{table}, got %q", topic)
+		return errors.Errorf("expected topic format {schema}.{table}, got %q", consum.Topic)
 	}
 
 	t := time.Now()
 
-	defer kafka.AllowRebalance()
+	defer consum.AllowRebalance()
 
 	var batch []*kgo.Record
 	pollCtx, cancel := context.WithTimeout(ctx, s.cfg.Kafka.Batch.Timeout)
 	defer cancel()
 	for len(batch) < s.cfg.Kafka.Batch.Size {
-		fetches := kafka.PollRecords(pollCtx, s.cfg.Kafka.Batch.Size-len(batch))
+		fetches := consum.PollRecords(pollCtx, s.cfg.Kafka.Batch.Size-len(batch))
 		if err := fetches.Err(); err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
 				break
@@ -150,7 +155,7 @@ func (s *Sink) poll(ctx context.Context, kafka *kgo.Client, topic string) error 
 		}
 	}
 
-	if err := kafka.CommitRecords(context.Background(), batch...); err != nil {
+	if err := consum.CommitRecords(context.Background(), batch...); err != nil {
 		return errors.Wrapf(err, "Kafka: commit records")
 	}
 	log.Info().Int("size", len(batch)).Msg("ClickHouse: batch is successfully sent")
@@ -163,6 +168,7 @@ func (s *Sink) writeToCH(ctx context.Context, table string, records []*kgo.Recor
 	if s.i <= 500 {
 		select {
 		case <-ctx.Done():
+			return ctx.Err()
 		case <-time.After(20 * time.Second):
 		}
 	}
@@ -185,4 +191,9 @@ func (s *Sink) writeToCH(ctx context.Context, table string, records []*kgo.Recor
 	}
 
 	return errors.Wrap(batch.Send(), "ClickHouse: Send batch")
+}
+
+type consumer struct {
+	*kgo.Client
+	Topic string
 }

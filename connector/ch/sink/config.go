@@ -10,6 +10,7 @@ type Config struct {
 		Brokers          []string      `yaml:"brokers" validate:"min=1,dive,url"`
 		Topics           []string      `yaml:"topics" validate:"min=1"`
 		RebalanceTimeout time.Duration `yaml:"rebalance_timeout" validate:"default=1m"`
+		WorkersPerTopic  uint          `yaml:"workers_per_topic" validate:"default=1"`
 		Batch            struct {
 			Size    int           `yaml:"size" validate:"default=10000"`
 			Timeout time.Duration `yaml:"timeout" validate:"default=5s"`

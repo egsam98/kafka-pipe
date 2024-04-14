@@ -71,16 +71,31 @@ func validateDefault(fl validator.FieldLevel) bool {
 		field.Set(reflect.ValueOf(dur))
 	default:
 		switch kind := field.Kind(); kind {
+		case reflect.Bool:
+			switch fl.Param() {
+			case "true":
+				field.SetBool(true)
+			case "false":
+				field.SetBool(false)
+			default:
+				panic(errors.Errorf("default: unexpected bool value: %s. Pass true or false", fl.Param()))
+			}
 		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 			value, err := strconv.ParseInt(fl.Param(), 10, 64)
 			if err != nil {
 				panic(err)
 			}
 			field.SetInt(value)
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			value, err := strconv.ParseUint(fl.Param(), 10, 64)
+			if err != nil {
+				panic(err)
+			}
+			field.SetUint(value)
 		case reflect.String:
 			field.SetString(fl.Param())
 		default:
-			panic(fmt.Errorf("unexpected reflect.Kind: %s", kind))
+			panic(fmt.Errorf("default: unexpected reflect.Kind: %s", kind))
 		}
 	}
 	return true

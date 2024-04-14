@@ -7,7 +7,7 @@ import (
 )
 
 type Config struct {
-	Name string `yaml:"name"`
+	Name string `yaml:"name" validate:"required"`
 	Pg   struct {
 		SkipDelete  bool     `yaml:"skip.delete"`
 		Url         string   `yaml:"url" validate:"url"`
