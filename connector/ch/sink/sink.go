@@ -43,7 +43,6 @@ func (s *Sink) Run(ctx context.Context) error {
 				BatchSize:        s.cfg.Kafka.Batch.Size,
 				BatchTimeout:     s.cfg.Kafka.Batch.Timeout,
 				RebalanceTimeout: s.cfg.Kafka.RebalanceTimeout,
-				Handler:          s.writeToCH,
 			})
 			if err != nil {
 				return err
@@ -75,7 +74,7 @@ func (s *Sink) Run(ctx context.Context) error {
 		wg.Add(1)
 		go func(consum *kgox.Consumer) {
 			defer wg.Done()
-			consum.Listen(ctx)
+			consum.Listen(ctx, s.writeToCH)
 		}(consum)
 	}
 	wg.Wait()

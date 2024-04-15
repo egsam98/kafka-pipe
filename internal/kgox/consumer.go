@@ -21,7 +21,6 @@ type ConsumerConfig struct {
 	Topic, Group                   string
 	BatchSize                      int
 	BatchTimeout, RebalanceTimeout time.Duration
-	Handler                        func(ctx context.Context, batch []*kgo.Record) error
 }
 
 func NewConsumer(cfg ConsumerConfig) (*Consumer, error) {
@@ -30,7 +29,8 @@ func NewConsumer(cfg ConsumerConfig) (*Consumer, error) {
 		log: NewLogger(&log.Logger),
 	}
 
-	client, err := kgo.NewClient(
+	var err error
+	if c.Client, err = kgo.NewClient(
 		kgo.SeedBrokers(cfg.Brokers...),
 		kgo.ConsumeTopics(cfg.Topic),
 		kgo.ConsumerGroup(cfg.Group),
@@ -38,21 +38,20 @@ func NewConsumer(cfg ConsumerConfig) (*Consumer, error) {
 		kgo.RebalanceTimeout(cfg.RebalanceTimeout),
 		kgo.DisableAutoCommit(),
 		kgo.WithLogger(&c.log),
-	)
-	if err != nil {
+	); err != nil {
 		return nil, errors.Wrap(err, "Kafka: Init consumer")
 	}
-	if err := client.Ping(context.Background()); err != nil {
+	if err := c.Ping(context.Background()); err != nil {
 		return nil, errors.Wrap(err, "Kafka: Ping brokers")
 	}
-
-	c.Client = client
 	return c, nil
 }
 
-func (c *Consumer) Listen(ctx context.Context) {
+type Handler func(ctx context.Context, batch []*kgo.Record) error
+
+func (c *Consumer) Listen(ctx context.Context, handler Handler) {
 	for {
-		if err := c.poll(ctx); err != nil {
+		if err := c.poll(ctx, handler); err != nil {
 			if errors.Is(err, context.Canceled) {
 				return
 			}
@@ -61,7 +60,7 @@ func (c *Consumer) Listen(ctx context.Context) {
 	}
 }
 
-func (c *Consumer) poll(ctx context.Context) error {
+func (c *Consumer) poll(ctx context.Context, handler Handler) error {
 	defer c.AllowRebalance()
 
 	var batch []*kgo.Record
@@ -88,7 +87,7 @@ func (c *Consumer) poll(ctx context.Context) error {
 	go func() {
 		select {
 		case <-handleCtx.Done():
-		case err := <-c.log.Errors:
+		case err := <-c.log.Errors():
 			if errors.Is(err, kerr.RebalanceInProgress) {
 				handleCancel(err)
 			}
@@ -96,7 +95,7 @@ func (c *Consumer) poll(ctx context.Context) error {
 	}()
 
 	for {
-		err := c.cfg.Handler(handleCtx, batch)
+		err := handler(handleCtx, batch)
 		if err == nil {
 			break
 		}

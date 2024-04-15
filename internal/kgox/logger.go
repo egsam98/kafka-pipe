@@ -10,14 +10,18 @@ import (
 type Logger struct {
 	*zerolog.Logger
 	prevErr error
-	Errors  chan error
+	errs    chan error
 }
 
 func NewLogger(base *zerolog.Logger) Logger {
 	return Logger{
 		Logger: base,
-		Errors: make(chan error),
+		errs:   make(chan error),
 	}
+}
+
+func (l *Logger) Errors() <-chan error {
+	return l.errs
 }
 
 func (l *Logger) Level() kgo.LogLevel {
@@ -31,7 +35,7 @@ func (l *Logger) Log(level kgo.LogLevel, msg string, keyVals ...any) {
 			return
 		}
 		select {
-		case l.Errors <- err:
+		case l.errs <- err:
 		default:
 		}
 		l.prevErr = err
