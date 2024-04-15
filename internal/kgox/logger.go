@@ -8,8 +8,16 @@ import (
 )
 
 type Logger struct {
-	zerolog.Logger
-	prevErr any
+	*zerolog.Logger
+	prevErr error
+	Errors  chan error
+}
+
+func NewLogger(base *zerolog.Logger) Logger {
+	return Logger{
+		Logger: base,
+		Errors: make(chan error),
+	}
 }
 
 func (l *Logger) Level() kgo.LogLevel {
@@ -18,9 +26,13 @@ func (l *Logger) Level() kgo.LogLevel {
 
 func (l *Logger) Log(level kgo.LogLevel, msg string, keyVals ...any) {
 	if idx := slices.Index(keyVals, "err"); idx != -1 {
-		err := keyVals[idx+1]
+		err := keyVals[idx+1].(error)
 		if l.prevErr == err {
 			return
+		}
+		select {
+		case l.Errors <- err:
+		default:
 		}
 		l.prevErr = err
 	}
