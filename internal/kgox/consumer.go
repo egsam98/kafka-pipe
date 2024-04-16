@@ -113,6 +113,6 @@ func (c *Consumer) poll(ctx context.Context, handler Handler) error {
 		}
 	}
 
-	err := c.CommitRecords(context.Background(), batch...)
+	err := c.CommitRecords(context.Background(), batch...) // TODO
 	return errors.Wrapf(err, "Kafka: commit records")
 }

@@ -2,13 +2,13 @@ package sink
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"reflect"
 	"sync"
-	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
-	"github.com/google/uuid"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -91,16 +91,33 @@ func (s *Sink) writeToCH(ctx context.Context, records []*kgo.Record) error {
 	table := records[0].Topic
 
 	// TODO
-	log.Info().Msg("PROCESS BATCH")
-	if s.i <= 500 {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(20 * time.Second):
-		}
+	//log.Info().Msg("PROCESS BATCH")
+	//if s.i <= 500 {
+	//	select {
+	//	case <-ctx.Done():
+	//		return ctx.Err()
+	//	case <-time.After(20 * time.Second):
+	//	}
+	//}
+	//s.i++
+	//return nil
+
+	rows, err := s.chConn.Query(ctx, `SELECT * from system.columns WHERE table = $1`, table)
+	if err != nil {
+		return err
 	}
-	s.i++
-	return nil
+	defer rows.Close()
+
+	var columns []string
+	for rows.Next() {
+		var column struct {
+			Name string `ch:"name"`
+		}
+		if err := rows.ScanStruct(&column); err != nil {
+			return err
+		}
+		columns = append(columns, column.Name)
+	}
 
 	batch, err := s.chConn.PrepareBatch(ctx, fmt.Sprintf(`INSERT INTO %s.%s`, s.cfg.ClickHouse.Database, table))
 	if err != nil {
@@ -108,23 +125,28 @@ func (s *Sink) writeToCH(ctx context.Context, records []*kgo.Record) error {
 	}
 
 	for _, rec := range records {
-		//var value map[string]any
-		//if err := json.Unmarshal(rec.Value, &value); err != nil {
-		//	return errors.Wrapf(err, "Kafka: Unmarshal %q into map", string(rec.Value))
-		//}
-
-		//var id struct {
-		//	Value string `json:"id"`
-		//}
-		//if err := json.Unmarshal(rec.Key, &id); err != nil {
-		//	return errors.Wrapf(err, "Kafka: Unmarshal %q into %T", string(rec.Key), id)
-		//}
-		var key kgox.Key[uuid.UUID]
-		if err := key.Parse(rec.Key); err != nil {
-			return err
+		var data map[string]any
+		if err := json.Unmarshal(rec.Value, &data); err != nil {
+			return errors.Wrapf(err, "Kafka: Unmarshal %q into map", string(rec.Value))
 		}
 
-		if err := batch.Append(key.Value, rec.Value); err != nil {
+		for _, column := range columns {
+			if _, ok := data[column]; !ok {
+				return errors.Errorf("table column %s isn't defined in Kafka value %v", column, data)
+			}
+		}
+
+		structFields := make([]reflect.StructField, 0, len(data))
+		for key, value := range data {
+			structFields = append(structFields, reflect.StructField{
+				Name: key,
+				Type: reflect.TypeOf(value),
+				Tag:  reflect.StructTag(key),
+			})
+		}
+		structType := reflect.StructOf(structFields)
+
+		if err := batch.AppendStruct(structType); err != nil {
 			return errors.Wrap(err, "ClickHouse")
 		}
 	}
