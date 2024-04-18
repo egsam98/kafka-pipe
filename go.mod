@@ -74,3 +74,5 @@ require (
 	google.golang.org/protobuf v1.33.0 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 )
+
+replace github.com/ClickHouse/clickhouse-go/v2 v2.23.1 => github.com/egsam98/clickhouse-go/v2 v2.23.2-0.20240418120604-3b9512af0982

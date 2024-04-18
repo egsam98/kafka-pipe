@@ -10,6 +10,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/column"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/proto"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -110,14 +111,13 @@ func (s *Sink) writeToCH(ctx context.Context, records []*kgo.Record) error {
 		}
 	}
 
-	structType, err := s.tableSchema(ctx, table)
-	if err != nil {
-		return err
-	}
-
 	batch, err := s.chConn.PrepareBatch(ctx, fmt.Sprintf(`INSERT INTO %s.%q`, s.cfg.ClickHouse.Database, table))
 	if err != nil {
 		return errors.Wrap(err, "ClickHouse: Prepare batch")
+	}
+	structType, err := s.tableSchema(batch.Block())
+	if err != nil {
+		return err
 	}
 
 	for _, rec := range records {
@@ -137,28 +137,9 @@ func (s *Sink) writeToCH(ctx context.Context, records []*kgo.Record) error {
 	return nil
 }
 
-func (s *Sink) tableSchema(ctx context.Context, table string) (reflect.Type, error) {
-	rows, err := s.chConn.Query(ctx, `SELECT name, type FROM system.columns WHERE database = $1 AND table = $2 ORDER BY position`,
-		s.cfg.ClickHouse.Database, table)
-	if err != nil {
-		return nil, errors.Wrapf(err, "ClickHouse: obtain %q's columns info", table)
-	}
-	defer rows.Close()
-	var colInfos []columnInfo
-	for rows.Next() {
-		var info columnInfo
-		if err := rows.ScanStruct(&info); err != nil {
-			return nil, errors.Wrap(err, "ClickHouse: scan column info")
-		}
-		colInfos = append(colInfos, info)
-	}
-
-	fields := make([]reflect.StructField, len(colInfos))
-	for i, info := range colInfos {
-		col, err := column.Type(info.Type).Column(info.Name, nil)
-		if err != nil {
-			return nil, err
-		}
+func (s *Sink) tableSchema(block proto.Block) (reflect.Type, error) {
+	fields := make([]reflect.StructField, len(block.Columns))
+	for i, col := range block.Columns {
 		var fieldType reflect.Type
 		switch col.(type) {
 		case *column.DateTime:
@@ -167,16 +148,12 @@ func (s *Sink) tableSchema(ctx context.Context, table string) (reflect.Type, err
 			fieldType = col.ScanType()
 		}
 
+		name := col.Name()
 		fields[i] = reflect.StructField{
-			Name: cases.Title(language.Und).String(info.Name),
+			Name: cases.Title(language.Und).String(name),
 			Type: fieldType,
-			Tag:  reflect.StructTag(fmt.Sprintf("json:%q ch:%q", info.Name, info.Name)),
+			Tag:  reflect.StructTag(fmt.Sprintf("json:%q ch:%q", name, name)),
 		}
 	}
 	return reflect.StructOf(fields), nil
-}
-
-type columnInfo struct {
-	Name string `ch:"name"`
-	Type string `ch:"type"`
 }
