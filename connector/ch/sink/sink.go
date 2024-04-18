@@ -8,17 +8,20 @@ import (
 	"sync"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/column"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 
 	"kafka-pipe/internal/kgox"
+	"kafka-pipe/internal/timex"
 	"kafka-pipe/internal/validate"
 )
 
 type Sink struct {
-	i         int // TODO temp
 	cfg       Config
 	consumers []*kgox.Consumer
 	chConn    driver.Conn
@@ -88,8 +91,6 @@ func (s *Sink) Run(ctx context.Context) error {
 }
 
 func (s *Sink) writeToCH(ctx context.Context, records []*kgo.Record) error {
-	table := records[0].Topic
-
 	// TODO
 	//log.Info().Msg("PROCESS BATCH")
 	//if s.i <= 500 {
@@ -102,51 +103,29 @@ func (s *Sink) writeToCH(ctx context.Context, records []*kgo.Record) error {
 	//s.i++
 	//return nil
 
-	rows, err := s.chConn.Query(ctx, `SELECT * from system.columns WHERE table = $1`, table)
+	table := records[0].Topic
+	if s.cfg.OnProcess != nil {
+		if err := s.cfg.OnProcess(ctx, records); err != nil {
+			return err
+		}
+	}
+
+	structType, err := s.tableSchema(ctx, table)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 
-	var columns []string
-	for rows.Next() {
-		var column struct {
-			Name string `ch:"name"`
-		}
-		if err := rows.ScanStruct(&column); err != nil {
-			return err
-		}
-		columns = append(columns, column.Name)
-	}
-
-	batch, err := s.chConn.PrepareBatch(ctx, fmt.Sprintf(`INSERT INTO %s.%s`, s.cfg.ClickHouse.Database, table))
+	batch, err := s.chConn.PrepareBatch(ctx, fmt.Sprintf(`INSERT INTO %s.%q`, s.cfg.ClickHouse.Database, table))
 	if err != nil {
 		return errors.Wrap(err, "ClickHouse: Prepare batch")
 	}
 
 	for _, rec := range records {
-		var data map[string]any
-		if err := json.Unmarshal(rec.Value, &data); err != nil {
-			return errors.Wrapf(err, "Kafka: Unmarshal %q into map", string(rec.Value))
+		data := reflect.New(structType).Interface()
+		if err := json.Unmarshal(rec.Value, data); err != nil {
+			return errors.Wrapf(err, "Kafka: Unmarshal %q into %T", string(rec.Value), data)
 		}
-
-		for _, column := range columns {
-			if _, ok := data[column]; !ok {
-				return errors.Errorf("table column %s isn't defined in Kafka value %v", column, data)
-			}
-		}
-
-		structFields := make([]reflect.StructField, 0, len(data))
-		for key, value := range data {
-			structFields = append(structFields, reflect.StructField{
-				Name: key,
-				Type: reflect.TypeOf(value),
-				Tag:  reflect.StructTag(key),
-			})
-		}
-		structType := reflect.StructOf(structFields)
-
-		if err := batch.AppendStruct(structType); err != nil {
+		if err := batch.AppendStruct(data); err != nil {
 			return errors.Wrap(err, "ClickHouse")
 		}
 	}
@@ -156,4 +135,48 @@ func (s *Sink) writeToCH(ctx context.Context, records []*kgo.Record) error {
 	}
 	log.Info().Int("size", len(records)).Msg("ClickHouse: batch is successfully sent")
 	return nil
+}
+
+func (s *Sink) tableSchema(ctx context.Context, table string) (reflect.Type, error) {
+	rows, err := s.chConn.Query(ctx, `SELECT name, type FROM system.columns WHERE database = $1 AND table = $2 ORDER BY position`,
+		s.cfg.ClickHouse.Database, table)
+	if err != nil {
+		return nil, errors.Wrapf(err, "ClickHouse: obtain %q's columns info", table)
+	}
+	defer rows.Close()
+	var colInfos []columnInfo
+	for rows.Next() {
+		var info columnInfo
+		if err := rows.ScanStruct(&info); err != nil {
+			return nil, errors.Wrap(err, "ClickHouse: scan column info")
+		}
+		colInfos = append(colInfos, info)
+	}
+
+	fields := make([]reflect.StructField, len(colInfos))
+	for i, info := range colInfos {
+		col, err := column.Type(info.Type).Column(info.Name, nil)
+		if err != nil {
+			return nil, err
+		}
+		var fieldType reflect.Type
+		switch col.(type) {
+		case *column.DateTime:
+			fieldType = reflect.TypeFor[timex.UnixMicro]()
+		default:
+			fieldType = col.ScanType()
+		}
+
+		fields[i] = reflect.StructField{
+			Name: cases.Title(language.Und).String(info.Name),
+			Type: fieldType,
+			Tag:  reflect.StructTag(fmt.Sprintf("json:%q ch:%q", info.Name, info.Name)),
+		}
+	}
+	return reflect.StructOf(fields), nil
+}
+
+type columnInfo struct {
+	Name string `ch:"name"`
+	Type string `ch:"type"`
 }

@@ -1,7 +1,10 @@
 package sink
 
 import (
+	"context"
 	"time"
+
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 type Config struct {
@@ -22,4 +25,5 @@ type Config struct {
 		Password string   `yaml:"password"`
 		Addrs    []string `yaml:"addrs" validate:"min=1,dive,url"`
 	} `yaml:"click_house"`
+	OnProcess func(ctx context.Context, batch []*kgo.Record) error
 }
