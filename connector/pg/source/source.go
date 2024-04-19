@@ -24,6 +24,7 @@ import (
 
 	"github.com/egsam98/kafka-pipe/connector/pg"
 	"github.com/egsam98/kafka-pipe/internal/set"
+	"github.com/egsam98/kafka-pipe/version"
 )
 
 const Plugin = "pgoutput"
@@ -412,6 +413,10 @@ func (s *Source) produceMessages(msgs <-chan WALMessage) error {
 				Key:   key,
 				Value: value,
 				Headers: []kgo.RecordHeader{
+					{
+						Key:   "version",
+						Value: []byte(version.Version),
+					},
 					{
 						Key:   "lsn",
 						Value: []byte(msg.Start.String()),

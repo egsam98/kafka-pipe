@@ -23,6 +23,7 @@ import (
 	_ "github.com/egsam98/kafka-pipe/connector/s3/backup"
 	_ "github.com/egsam98/kafka-pipe/connector/s3/sink"
 	"github.com/egsam98/kafka-pipe/internal/badgerx"
+	"github.com/egsam98/kafka-pipe/version"
 )
 
 const HealthAddr = ":8081"
@@ -103,7 +104,11 @@ func run() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	log.Info().Str("name", cfg.Name).Str("class", cfg.Class).Msg("Run connector")
+	log.Info().
+		Str("name", cfg.Name).
+		Str("class", cfg.Class).
+		Str("version", version.Version).
+		Msg("Run connector")
 	if err := conn.Run(ctx); err != nil {
 		return err
 	}

@@ -14,7 +14,7 @@ lint: ## Run linter
 	golangci-lint run
 
 build: ## Build docker image
-	docker build -t $(IMAGE):$(VERSION) .
+	docker build --build-arg "VERSION=$(VERSION)" -t $(IMAGE):$(VERSION) .
 
 push: ## Push built docker image to DockerHub
 	docker push $(IMAGE):$(VERSION)
