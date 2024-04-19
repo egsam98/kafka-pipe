@@ -190,19 +190,20 @@ func (s *Sink) tableSchema(block proto.Block) (reflect.Type, error) {
 
 type batchState struct {
 	sync.Mutex
-	name    string
-	offsets map[string]map[int32]int64
+	dbKey   []byte
 	db      *badger.DB
+	offsets map[string]map[int32]int64
 }
 
 func newBatchState(name string, db *badger.DB) (*batchState, error) {
 	state := batchState{
-		name:    name,
-		offsets: make(map[string]map[int32]int64),
+		dbKey:   fmt.Appendf(nil, "%s/batch_state", name),
 		db:      db,
+		offsets: make(map[string]map[int32]int64),
 	}
+
 	if err := db.View(func(tx *badger.Txn) error {
-		item, err := tx.Get(state.key())
+		item, err := tx.Get(state.dbKey)
 		if err != nil {
 			return err
 		}
@@ -222,12 +223,8 @@ func (b *batchState) Unlock() {
 		if err != nil {
 			return err
 		}
-		return tx.Set(b.key(), value)
+		return tx.Set(b.dbKey, value)
 	}); err != nil {
 		log.Warn().Err(err).Msgf("Badger: Failed to save batch state")
 	}
-}
-
-func (b *batchState) key() []byte {
-	return fmt.Appendf(nil, "%s/batch_state", b.name)
 }
