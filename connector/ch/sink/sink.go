@@ -1,6 +1,7 @@
 package sink
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/column"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/proto"
+	"github.com/dgraph-io/badger/v4"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -23,9 +25,10 @@ import (
 )
 
 type Sink struct {
-	cfg       Config
-	consumers []*kgox.Consumer
-	chConn    driver.Conn
+	cfg        Config
+	consumers  []*kgox.Consumer
+	chConn     driver.Conn
+	batchState *batchState
 }
 
 func NewSink(cfg Config) *Sink {
@@ -36,13 +39,17 @@ func (s *Sink) Run(ctx context.Context) error {
 	if err := validate.Struct(&s.cfg); err != nil {
 		return err
 	}
+	var err error
+	if s.batchState, err = newBatchState(s.cfg.Name, s.cfg.DB); err != nil {
+		return err
+	}
 
 	// Init consumer group
 	for _, topic := range s.cfg.Kafka.Topics {
 		for range s.cfg.Kafka.WorkersPerTopic {
 			consum, err := kgox.NewConsumer(kgox.ConsumerConfig{
 				Brokers:          s.cfg.Kafka.Brokers,
-				Topic:            topic,
+				Topics:           []string{topic},
 				Group:            s.cfg.Kafka.GroupID + "-" + topic,
 				BatchSize:        s.cfg.Kafka.Batch.Size,
 				BatchTimeout:     s.cfg.Kafka.Batch.Timeout,
@@ -55,7 +62,6 @@ func (s *Sink) Run(ctx context.Context) error {
 		}
 	}
 
-	var err error
 	if s.chConn, err = clickhouse.Open(&clickhouse.Options{
 		Protocol: clickhouse.Native,
 		Addr:     s.cfg.ClickHouse.Addrs,
@@ -91,18 +97,33 @@ func (s *Sink) Run(ctx context.Context) error {
 	return s.chConn.Close()
 }
 
-func (s *Sink) writeToCH(ctx context.Context, records []*kgo.Record) error {
-	// TODO
-	//log.Info().Msg("PROCESS BATCH")
-	//if s.i <= 500 {
-	//	select {
-	//	case <-ctx.Done():
-	//		return ctx.Err()
-	//	case <-time.After(20 * time.Second):
-	//	}
-	//}
-	//s.i++
-	//return nil
+func (s *Sink) writeToCH(ctx context.Context, fetches kgo.Fetches) error {
+	var records []*kgo.Record
+	s.batchState.Lock()
+	fetches.EachPartition(func(fs kgo.FetchTopicPartition) {
+		if len(fs.Records) == 0 {
+			return
+		}
+
+		idx := -1
+		if part, ok := s.batchState.offsets[fs.Topic]; ok {
+			diff := int(cmp.Or(part[fs.Partition], -1) - fs.Records[0].Offset)
+			if diff >= len(fs.Records)-1 {
+				return
+			}
+			if diff >= 0 {
+				idx = diff
+			}
+		} else {
+			s.batchState.offsets[fs.Topic] = make(map[int32]int64)
+		}
+
+		records = append(records, fs.Records[idx+1:]...)
+	})
+	s.batchState.Unlock()
+	if len(records) == 0 {
+		return nil
+	}
 
 	table := records[0].Topic
 	if s.cfg.OnProcess != nil {
@@ -129,10 +150,19 @@ func (s *Sink) writeToCH(ctx context.Context, records []*kgo.Record) error {
 			return errors.Wrap(err, "ClickHouse")
 		}
 	}
-
 	if err := batch.Send(); err != nil {
 		return errors.Wrap(err, "ClickHouse: Send batch")
 	}
+
+	s.batchState.Lock()
+	fetches.EachPartition(func(fs kgo.FetchTopicPartition) {
+		if len(fs.Records) == 0 {
+			return
+		}
+		s.batchState.offsets[fs.Topic][fs.Partition] = fs.Records[len(fs.Records)-1].Offset
+	})
+	s.batchState.Unlock()
+
 	log.Info().Int("size", len(records)).Msg("ClickHouse: batch is successfully sent")
 	return nil
 }
@@ -156,4 +186,48 @@ func (s *Sink) tableSchema(block proto.Block) (reflect.Type, error) {
 		}
 	}
 	return reflect.StructOf(fields), nil
+}
+
+type batchState struct {
+	sync.Mutex
+	name    string
+	offsets map[string]map[int32]int64
+	db      *badger.DB
+}
+
+func newBatchState(name string, db *badger.DB) (*batchState, error) {
+	state := batchState{
+		name:    name,
+		offsets: make(map[string]map[int32]int64),
+		db:      db,
+	}
+	if err := db.View(func(tx *badger.Txn) error {
+		item, err := tx.Get(state.key())
+		if err != nil {
+			return err
+		}
+		return item.Value(func(val []byte) error {
+			return json.Unmarshal(val, &state.offsets)
+		})
+	}); err != nil && !errors.Is(err, badger.ErrKeyNotFound) {
+		return nil, errors.Wrap(err, "Badger: get batch state")
+	}
+	return &state, nil
+}
+
+func (b *batchState) Unlock() {
+	defer b.Mutex.Unlock()
+	if err := b.db.Update(func(tx *badger.Txn) error {
+		value, err := json.Marshal(b.offsets)
+		if err != nil {
+			return err
+		}
+		return tx.Set(b.key(), value)
+	}); err != nil {
+		log.Warn().Err(err).Msgf("Badger: Failed to save batch state")
+	}
+}
+
+func (b *batchState) key() []byte {
+	return fmt.Appendf(nil, "%s/batch_state", b.name)
 }

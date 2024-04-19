@@ -4,10 +4,12 @@ import (
 	"context"
 	"time"
 
+	"github.com/dgraph-io/badger/v4"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 type Config struct {
+	Name  string `yaml:"name" validate:"required"`
 	Kafka struct {
 		GroupID          string        `yaml:"group_id" validate:"required"`
 		Brokers          []string      `yaml:"brokers" validate:"min=1,dive,url"`
@@ -25,5 +27,6 @@ type Config struct {
 		Password string   `yaml:"password"`
 		Addrs    []string `yaml:"addrs" validate:"min=1,dive,url"`
 	} `yaml:"click_house"`
-	OnProcess func(ctx context.Context, batch []*kgo.Record) error
+	DB        *badger.DB                                           `yaml:"-"`
+	OnProcess func(ctx context.Context, batch []*kgo.Record) error `yaml:"-"`
 }

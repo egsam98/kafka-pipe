@@ -17,8 +17,8 @@ type Consumer struct {
 }
 
 type ConsumerConfig struct {
-	Brokers                        []string
-	Topic, Group                   string
+	Brokers, Topics                []string
+	Group                          string
 	BatchSize                      int
 	BatchTimeout, RebalanceTimeout time.Duration
 }
@@ -32,7 +32,7 @@ func NewConsumer(cfg ConsumerConfig) (*Consumer, error) {
 	var err error
 	if c.Client, err = kgo.NewClient(
 		kgo.SeedBrokers(cfg.Brokers...),
-		kgo.ConsumeTopics(cfg.Topic),
+		kgo.ConsumeTopics(cfg.Topics...),
 		kgo.ConsumerGroup(cfg.Group),
 		kgo.BlockRebalanceOnPoll(),
 		kgo.RebalanceTimeout(cfg.RebalanceTimeout),
@@ -47,7 +47,7 @@ func NewConsumer(cfg ConsumerConfig) (*Consumer, error) {
 	return c, nil
 }
 
-type Handler func(ctx context.Context, batch []*kgo.Record) error
+type Handler func(ctx context.Context, fetches kgo.Fetches) error
 
 func (c *Consumer) Listen(ctx context.Context, handler Handler) {
 	for {
@@ -55,7 +55,7 @@ func (c *Consumer) Listen(ctx context.Context, handler Handler) {
 			if errors.Is(err, context.Canceled) {
 				return
 			}
-			log.Error().Stack().Err(err).Msgf("Kafka: Poll topic %q", c.cfg.Topic)
+			log.Error().Stack().Err(err).Msgf("Kafka: Poll topics %v", c.cfg.Topics)
 		}
 	}
 }
@@ -63,22 +63,20 @@ func (c *Consumer) Listen(ctx context.Context, handler Handler) {
 func (c *Consumer) poll(ctx context.Context, handler Handler) error {
 	defer c.AllowRebalance()
 
-	var batch []*kgo.Record
-	pollCtx, pollCancel := context.WithTimeout(ctx, c.cfg.BatchTimeout)
-	defer pollCancel()
-	for len(batch) < c.cfg.BatchSize {
-		fetches := c.PollRecords(pollCtx, c.cfg.BatchSize-len(batch))
-		if err := fetches.Err(); err != nil {
-			if errors.Is(err, context.DeadlineExceeded) {
-				break
-			}
-			return errors.Wrap(err, "Kafka: Fetch error")
-		}
-		batch = append(batch, fetches.Records()...)
+	timer := time.NewTimer(c.cfg.BatchTimeout)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
 	}
 
+	batch := c.PollRecords(nil, c.cfg.BatchSize)
 	if len(batch) == 0 {
 		return nil
+	}
+	if err := batch.Err(); err != nil {
+		return errors.Wrap(err, "Kafka: Fetch error")
 	}
 
 	handleCtx, handleCancel := context.WithCancelCause(ctx)
@@ -113,6 +111,6 @@ func (c *Consumer) poll(ctx context.Context, handler Handler) error {
 		}
 	}
 
-	err := c.CommitRecords(context.Background(), batch...) // TODO
-	return errors.Wrapf(err, "Kafka: commit records")
+	err := c.CommitUncommittedOffsets(context.Background())
+	return errors.Wrapf(err, "Kafka: commit offsets")
 }

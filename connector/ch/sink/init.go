@@ -13,6 +13,7 @@ func init() {
 		if err := yaml.Unmarshal(config.Raw, &cfg); err != nil {
 			return nil, errors.Wrap(err, "parse sink config")
 		}
+		cfg.DB = config.Storage
 		return NewSink(cfg), nil
 	})
 }
