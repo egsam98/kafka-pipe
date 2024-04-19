@@ -22,8 +22,8 @@ import (
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 
-	"kafka-pipe/connector/pg"
-	"kafka-pipe/internal/set"
+	"github.com/egsam98/kafka-pipe/connector/pg"
+	"github.com/egsam98/kafka-pipe/internal/set"
 )
 
 const Plugin = "pgoutput"

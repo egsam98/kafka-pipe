@@ -17,12 +17,12 @@ import (
 	"github.com/rs/zerolog/pkgerrors"
 	"gopkg.in/yaml.v3"
 
-	"kafka-pipe/connector"
-	_ "kafka-pipe/connector/pg/snapshot"
-	_ "kafka-pipe/connector/pg/source"
-	_ "kafka-pipe/connector/s3/backup"
-	_ "kafka-pipe/connector/s3/sink"
-	"kafka-pipe/internal/badgerx"
+	"github.com/egsam98/kafka-pipe/connector"
+	_ "github.com/egsam98/kafka-pipe/connector/pg/snapshot"
+	_ "github.com/egsam98/kafka-pipe/connector/pg/source"
+	_ "github.com/egsam98/kafka-pipe/connector/s3/backup"
+	_ "github.com/egsam98/kafka-pipe/connector/s3/sink"
+	"github.com/egsam98/kafka-pipe/internal/badgerx"
 )
 
 const HealthAddr = ":8081"
