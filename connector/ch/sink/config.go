@@ -6,6 +6,8 @@ import (
 
 	"github.com/dgraph-io/badger/v4"
 	"github.com/twmb/franz-go/pkg/kgo"
+
+	"kafka-pipe/serde"
 )
 
 type Config struct {
@@ -27,6 +29,7 @@ type Config struct {
 		Password string   `yaml:"password"`
 		Addrs    []string `yaml:"addrs" validate:"min=1,dive,url"`
 	} `yaml:"click_house"`
-	DB        *badger.DB                                           `yaml:"-"`
-	OnProcess func(ctx context.Context, batch []*kgo.Record) error `yaml:"-"`
+	Deserializer serde.Deserializer                                   `yaml:"-" validate:"required"`
+	DB           *badger.DB                                           `yaml:"-" validate:"required"`
+	OnProcess    func(ctx context.Context, batch []*kgo.Record) error `yaml:"-"`
 }

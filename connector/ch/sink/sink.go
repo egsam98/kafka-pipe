@@ -9,7 +9,6 @@ import (
 	"sync"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
-	"github.com/ClickHouse/clickhouse-go/v2/lib/column"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/proto"
 	"github.com/dgraph-io/badger/v4"
@@ -20,7 +19,6 @@ import (
 	"golang.org/x/text/language"
 
 	"kafka-pipe/internal/kgox"
-	"kafka-pipe/internal/timex"
 	"kafka-pipe/internal/validate"
 )
 
@@ -125,26 +123,27 @@ func (s *Sink) writeToCH(ctx context.Context, fetches kgo.Fetches) error {
 		return nil
 	}
 
-	table := records[0].Topic
-	if s.cfg.OnProcess != nil {
+	if s.cfg.OnProcess != nil { // TODO serde
 		if err := s.cfg.OnProcess(ctx, records); err != nil {
 			return err
 		}
 	}
 
-	batch, err := s.chConn.PrepareBatch(ctx, fmt.Sprintf(`INSERT INTO %s.%q`, s.cfg.ClickHouse.Database, table))
+	batch, err := s.chConn.PrepareBatch(ctx, fmt.Sprintf(`INSERT INTO %s.%q`, s.cfg.ClickHouse.Database, records[0].Topic))
 	if err != nil {
 		return errors.Wrap(err, "ClickHouse: Prepare batch")
 	}
-	structType, err := s.tableSchema(batch.Block())
+	defer batch.Abort() //nolint:errcheck
+
+	structType, err := tableSchema(batch.Block())
 	if err != nil {
 		return err
 	}
 
 	for _, rec := range records {
 		data := reflect.New(structType).Interface()
-		if err := json.Unmarshal(rec.Value, data); err != nil {
-			return errors.Wrapf(err, "Kafka: Unmarshal %q into %T", string(rec.Value), data)
+		if err := s.cfg.Deserializer.Deserialize(data, rec.Value); err != nil {
+			return errors.Wrapf(err, "Deserialize message %q using %T", string(rec.Value), s.cfg.Deserializer)
 		}
 		if err := batch.AppendStruct(data); err != nil {
 			return errors.Wrap(err, "ClickHouse")
@@ -167,21 +166,13 @@ func (s *Sink) writeToCH(ctx context.Context, fetches kgo.Fetches) error {
 	return nil
 }
 
-func (s *Sink) tableSchema(block proto.Block) (reflect.Type, error) {
+func tableSchema(block proto.Block) (reflect.Type, error) {
 	fields := make([]reflect.StructField, len(block.Columns))
 	for i, col := range block.Columns {
-		var fieldType reflect.Type
-		switch col.(type) {
-		case *column.DateTime:
-			fieldType = reflect.TypeFor[timex.UnixMicro]()
-		default:
-			fieldType = col.ScanType()
-		}
-
 		name := col.Name()
 		fields[i] = reflect.StructField{
 			Name: cases.Title(language.Und).String(name),
-			Type: fieldType,
+			Type: col.ScanType(),
 			Tag:  reflect.StructTag(fmt.Sprintf("json:%q ch:%q", name, name)),
 		}
 	}
