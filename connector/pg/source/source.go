@@ -23,9 +23,9 @@ import (
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 
-	"kafka-pipe/connector/pg"
-	"kafka-pipe/internal/set"
-	"kafka-pipe/internal/validate"
+	"github.com/egsam98/kafka-pipe/connector/pg"
+	"github.com/egsam98/kafka-pipe/internal/set"
+	"github.com/egsam98/kafka-pipe/internal/validate"
 )
 
 const Plugin = "pgoutput"
@@ -426,6 +426,10 @@ func (s *Source) produceMessages(msgs <-chan WALMessage) error {
 				Key:   key,
 				Value: value,
 				Headers: []kgo.RecordHeader{
+					{
+						Key:   "version",
+						Value: []byte(version.Version),
+					},
 					{
 						Key:   "lsn",
 						Value: []byte(msg.Start.String()),

@@ -14,8 +14,8 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/twmb/franz-go/pkg/kgo"
 
-	"kafka-pipe/connector"
-	"kafka-pipe/connector/s3"
+	"github.com/egsam98/kafka-pipe/connector"
+	"github.com/egsam98/kafka-pipe/connector/s3"
 )
 
 type Backup struct {

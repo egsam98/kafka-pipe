@@ -1,7 +1,7 @@
 package sink
 
 import (
-	"kafka-pipe/connector"
+	"github.com/egsam98/kafka-pipe/connector"
 )
 
 func init() {

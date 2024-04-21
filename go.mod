@@ -1,4 +1,4 @@
-module kafka-pipe
+module github.com/egsam98/kafka-pipe
 
 go 1.22
 

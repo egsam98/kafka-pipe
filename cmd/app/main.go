@@ -17,14 +17,15 @@ import (
 	"github.com/rs/zerolog/pkgerrors"
 	"gopkg.in/yaml.v3"
 
-	"kafka-pipe/connector"
-	_ "kafka-pipe/connector/ch/sink"
-	_ "kafka-pipe/connector/pg/snapshot"
-	_ "kafka-pipe/connector/pg/source"
-	_ "kafka-pipe/connector/s3/backup"
-	_ "kafka-pipe/connector/s3/sink"
-	"kafka-pipe/internal/badgerx"
-	"kafka-pipe/internal/validate"
+	"github.com/egsam98/kafka-pipe/connector"
+	_ "github.com/egsam98/kafka-pipe/connector/pg/snapshot"
+	_ "github.com/egsam98/kafka-pipe/connector/pg/source"
+	_ "github.com/egsam98/kafka-pipe/connector/s3/backup"
+	_ "github.com/egsam98/kafka-pipe/connector/s3/sink"
+	_ "github.com/egsam98/kafka-pipe/connector/ch/sink"
+	"github.com/egsam98/kafka-pipe/internal/badgerx"
+	"github.com/egsam98/kafka-pipe/version"
+	"github.com/egsam98/kafka-pipe/internal/validate"
 )
 
 const HealthAddr = ":8081"
@@ -99,7 +100,11 @@ func run() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	log.Info().Str("name", cfg.Name).Str("class", cfg.Class).Msg("Run connector")
+	log.Info().
+		Str("name", cfg.Name).
+		Str("class", cfg.Class).
+		Str("version", version.Version).
+		Msg("Run connector")
 	if err := conn.Run(ctx); err != nil {
 		return err
 	}

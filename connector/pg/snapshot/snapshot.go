@@ -18,8 +18,8 @@ import (
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 
-	"kafka-pipe/connector/pg"
-	"kafka-pipe/internal/validate"
+	"github.com/egsam98/kafka-pipe/connector/pg"
+	"github.com/egsam98/kafka-pipe/internal/validate"
 )
 
 type Snapshot struct {
@@ -146,6 +146,10 @@ func (s *Snapshot) query(ctx context.Context, table string) error {
 			Value: value,
 			Topic: s.topic(table),
 			Headers: []kgo.RecordHeader{
+				{
+					Key:   "version",
+					Value: []byte(version.Version),
+				},
 				{
 					Key:   "ts_ms",
 					Value: []byte(strconv.FormatInt(time.Now().UnixMilli(), 10)),

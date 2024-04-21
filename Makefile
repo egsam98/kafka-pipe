@@ -1,6 +1,5 @@
-PROJECT = kafka-pipe
-IMAGE = egsam98/$(PROJECT)
-IMAGE_TAG ?= latest
+IMAGE = egsam98/kafka-pipe
+VERSION ?= dev
 
 -include .env
 
@@ -15,7 +14,7 @@ lint: ## Run linter
 	golangci-lint run
 
 build: ## Build docker image
-	docker build -t $(IMAGE):$(IMAGE_TAG) .
+	docker build --build-arg "VERSION=$(VERSION)" -t $(IMAGE):$(VERSION) .
 
 push: ## Push built docker image to DockerHub
-	docker push $(IMAGE):$(IMAGE_TAG)
+	docker push $(IMAGE):$(VERSION)

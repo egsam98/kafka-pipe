@@ -1,4 +1,6 @@
-FROM golang:1.21-alpine as BUILDER
+FROM golang:1.22-alpine as BUILDER
+
+ARG VERSION
 
 WORKDIR /app
 
@@ -6,7 +8,7 @@ COPY go.mod .
 COPY go.sum .
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -o kafka-pipe cmd/app/main.go
+RUN CGO_ENABLED=0 go build -ldflags "-X github.com/egsam98/kafka-pipe/version.Version=$VERSION" -o kafka-pipe cmd/app/main.go
 
 FROM alpine
 WORKDIR /app
