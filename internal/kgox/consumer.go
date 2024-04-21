@@ -71,7 +71,7 @@ func (c *Consumer) poll(ctx context.Context, handler Handler) error {
 	case <-timer.C:
 	}
 
-	batch := c.PollRecords(nil, c.cfg.BatchSize)
+	batch := c.PollRecords(nil, c.cfg.BatchSize) //nolint:staticcheck
 	if len(batch) == 0 {
 		return nil
 	}

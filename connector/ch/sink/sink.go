@@ -48,7 +48,7 @@ func (s *Sink) Run(ctx context.Context) error {
 			consum, err := kgox.NewConsumer(kgox.ConsumerConfig{
 				Brokers:          s.cfg.Kafka.Brokers,
 				Topics:           []string{topic},
-				Group:            s.cfg.Kafka.GroupID + "-" + topic,
+				Group:            s.cfg.Name + "-" + topic,
 				BatchSize:        s.cfg.Kafka.Batch.Size,
 				BatchTimeout:     s.cfg.Kafka.Batch.Timeout,
 				RebalanceTimeout: s.cfg.Kafka.RebalanceTimeout,
@@ -123,9 +123,9 @@ func (s *Sink) writeToCH(ctx context.Context, fetches kgo.Fetches) error {
 		return nil
 	}
 
-	if s.cfg.OnProcess != nil { // TODO serde
+	if s.cfg.OnProcess != nil {
 		if err := s.cfg.OnProcess(ctx, records); err != nil {
-			return err
+			return errors.Wrap(err, "OnProcess")
 		}
 	}
 
@@ -141,6 +141,9 @@ func (s *Sink) writeToCH(ctx context.Context, fetches kgo.Fetches) error {
 	}
 
 	for _, rec := range records {
+		if rec == nil {
+			continue
+		}
 		data := reflect.New(structType).Interface()
 		if err := s.cfg.Deserializer.Deserialize(data, rec.Value); err != nil {
 			return errors.Wrapf(err, "Deserialize message %q using %T", string(rec.Value), s.cfg.Deserializer)

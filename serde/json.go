@@ -22,7 +22,7 @@ func init() {
 type TimeFormat string
 
 const (
-	RFC3339        TimeFormat = "RFC3339"
+	RFC3339        TimeFormat = "rfc3339"
 	Timestamp      TimeFormat = "timestamp"
 	TimestampMilli TimeFormat = "timestamp-milli"
 )

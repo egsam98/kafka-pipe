@@ -35,7 +35,7 @@ func init() {
 	}
 }
 
-func Struct(src any) error {
+func Struct(src any, namespace ...string) error {
 	err := validate.Struct(src)
 	var vErrs validator.ValidationErrors
 	if !errors.As(err, &vErrs) {
@@ -47,7 +47,10 @@ func Struct(src any) error {
 		if i > 0 {
 			buf.WriteString("; ")
 		}
-
+		for _, s := range namespace {
+			buf.WriteString(s)
+			buf.WriteByte(':')
+		}
 		_, pathPrefix, _ := strings.Cut(fe.Namespace(), ".")
 		pathPrefix = strings.ReplaceAll(strings.TrimSuffix(pathPrefix, fe.Field()), ".", ":")
 		buf.WriteString(pathPrefix)

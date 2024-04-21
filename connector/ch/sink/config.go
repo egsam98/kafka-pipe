@@ -13,7 +13,6 @@ import (
 type Config struct {
 	Name  string `yaml:"name" validate:"required"`
 	Kafka struct {
-		GroupID          string        `yaml:"group_id" validate:"required"`
 		Brokers          []string      `yaml:"brokers" validate:"min=1,dive,url"`
 		Topics           []string      `yaml:"topics" validate:"min=1"`
 		RebalanceTimeout time.Duration `yaml:"rebalance_timeout" validate:"default=1m"`
