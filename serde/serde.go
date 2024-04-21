@@ -4,7 +4,7 @@ import (
 	"github.com/pkg/errors"
 	"gopkg.in/yaml.v3"
 
-	"kafka-pipe/internal/validate"
+	"github.com/egsam98/kafka-pipe/internal/validate"
 )
 
 type Deserializer interface {

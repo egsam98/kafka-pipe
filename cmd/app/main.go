@@ -18,14 +18,14 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/egsam98/kafka-pipe/connector"
+	_ "github.com/egsam98/kafka-pipe/connector/ch/sink"
 	_ "github.com/egsam98/kafka-pipe/connector/pg/snapshot"
 	_ "github.com/egsam98/kafka-pipe/connector/pg/source"
 	_ "github.com/egsam98/kafka-pipe/connector/s3/backup"
 	_ "github.com/egsam98/kafka-pipe/connector/s3/sink"
-	_ "github.com/egsam98/kafka-pipe/connector/ch/sink"
 	"github.com/egsam98/kafka-pipe/internal/badgerx"
-	"github.com/egsam98/kafka-pipe/version"
 	"github.com/egsam98/kafka-pipe/internal/validate"
+	"github.com/egsam98/kafka-pipe/version"
 )
 
 const HealthAddr = ":8081"

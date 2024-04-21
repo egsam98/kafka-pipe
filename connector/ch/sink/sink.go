@@ -18,8 +18,8 @@ import (
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 
-	"kafka-pipe/internal/kgox"
-	"kafka-pipe/internal/validate"
+	"github.com/egsam98/kafka-pipe/internal/kgox"
+	"github.com/egsam98/kafka-pipe/internal/validate"
 )
 
 type Sink struct {

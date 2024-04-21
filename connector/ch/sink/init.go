@@ -4,8 +4,8 @@ import (
 	"github.com/pkg/errors"
 	"gopkg.in/yaml.v3"
 
-	"kafka-pipe/connector"
-	"kafka-pipe/serde"
+	"github.com/egsam98/kafka-pipe/connector"
+	"github.com/egsam98/kafka-pipe/serde"
 )
 
 func init() {

@@ -7,7 +7,7 @@ import (
 	"github.com/dgraph-io/badger/v4"
 	"github.com/twmb/franz-go/pkg/kgo"
 
-	"kafka-pipe/serde"
+	"github.com/egsam98/kafka-pipe/serde"
 )
 
 type Config struct {

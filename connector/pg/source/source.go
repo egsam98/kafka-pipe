@@ -26,6 +26,7 @@ import (
 	"github.com/egsam98/kafka-pipe/connector/pg"
 	"github.com/egsam98/kafka-pipe/internal/set"
 	"github.com/egsam98/kafka-pipe/internal/validate"
+	"github.com/egsam98/kafka-pipe/version"
 )
 
 const Plugin = "pgoutput"

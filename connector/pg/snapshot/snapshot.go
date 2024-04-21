@@ -20,6 +20,7 @@ import (
 
 	"github.com/egsam98/kafka-pipe/connector/pg"
 	"github.com/egsam98/kafka-pipe/internal/validate"
+	"github.com/egsam98/kafka-pipe/version"
 )
 
 type Snapshot struct {
