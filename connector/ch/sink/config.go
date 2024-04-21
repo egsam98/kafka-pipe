@@ -30,5 +30,5 @@ type Config struct {
 	} `yaml:"click_house"`
 	Deserializer serde.Deserializer                                   `yaml:"-" validate:"required"`
 	DB           *badger.DB                                           `yaml:"-" validate:"required"`
-	OnProcess    func(ctx context.Context, batch []*kgo.Record) error `yaml:"-"`
+	BeforeInsert func(ctx context.Context, batch []*kgo.Record) error `yaml:"-"`
 }

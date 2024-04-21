@@ -123,9 +123,9 @@ func (s *Sink) writeToCH(ctx context.Context, fetches kgo.Fetches) error {
 		return nil
 	}
 
-	if s.cfg.OnProcess != nil {
-		if err := s.cfg.OnProcess(ctx, records); err != nil {
-			return errors.Wrap(err, "OnProcess")
+	if s.cfg.BeforeInsert != nil {
+		if err := s.cfg.BeforeInsert(ctx, records); err != nil {
+			return errors.Wrap(err, "BeforeInsert")
 		}
 	}
 
