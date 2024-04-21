@@ -11,11 +11,11 @@ type Deserializer interface {
 	Deserialize(dst any, src []byte) error
 }
 
-func NewDeserializerFromYAML(key string, node yaml.Node) (Deserializer, error) {
+func NewDeserializerFromYAML(key string, value yaml.Node) (Deserializer, error) {
 	var format struct {
 		Value string `yaml:"format"`
 	}
-	if err := node.Decode(&format); err != nil {
+	if err := value.Decode(&format); err != nil {
 		return nil, errors.Wrap(err, "decode serializer format")
 	}
 
@@ -42,7 +42,7 @@ func NewDeserializerFromYAML(key string, node yaml.Node) (Deserializer, error) {
 		return nil, errors.Errorf(`unknown deserializer type: %q. Possible values: [json,avro]`, format.Value)
 	}
 
-	if err := node.Decode(cfg); err != nil {
+	if err := value.Decode(cfg); err != nil {
 		return nil, errors.Wrap(err, "decode deserializer config")
 	}
 	if err := validate.Struct(cfg, key); err != nil {
