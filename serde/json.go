@@ -6,6 +6,9 @@ import (
 	"unsafe"
 
 	jsoniter "github.com/json-iterator/go"
+	"gopkg.in/yaml.v3"
+
+	"github.com/egsam98/kafka-pipe/internal/validate"
 )
 
 func init() {
@@ -33,6 +36,16 @@ type JSON struct {
 
 func NewJSON(timeFormat TimeFormat) *JSON {
 	return &JSON{timeFormat: timeFormat}
+}
+
+func newJSONFromYAML(value yaml.Node) (*JSON, error) {
+	var cfg struct {
+		TimeFormat TimeFormat `yaml:"time_format" validate:"default=timestamp-milli,oneof=rfc3339 timestamp timestamp-milli"`
+	}
+	if err := validate.StructFromYAML(&cfg, value); err != nil {
+		return nil, err
+	}
+	return NewJSON(cfg.TimeFormat), nil
 }
 
 func (j *JSON) Deserialize(dst any, src []byte) error {

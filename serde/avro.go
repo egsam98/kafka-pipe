@@ -8,6 +8,9 @@ import (
 	"github.com/hamba/avro/v2"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
+	"gopkg.in/yaml.v3"
+
+	"github.com/egsam98/kafka-pipe/internal/validate"
 )
 
 type Avro struct {
@@ -41,6 +44,16 @@ func NewAvro(schemaUri string) (*Avro, error) {
 	}
 
 	return &Avro{schema: schema}, nil
+}
+
+func newAvroFromYAML(value yaml.Node) (*Avro, error) {
+	var cfg struct {
+		SchemaURI string `yaml:"schema_uri" validate:"url"`
+	}
+	if err := validate.StructFromYAML(&cfg, value); err != nil {
+		return nil, err
+	}
+	return NewAvro(cfg.SchemaURI)
 }
 
 func (a *Avro) Deserialize(dst any, src []byte) error {

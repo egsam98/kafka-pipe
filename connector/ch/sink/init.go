@@ -18,7 +18,7 @@ func init() {
 			return nil, errors.Wrap(err, "parse sink config")
 		}
 		var err error
-		if cfg.Config.Deserializer, err = serde.NewDeserializerFromYAML("deserializer", cfg.Deserializer); err != nil {
+		if cfg.Config.Deserializer, err = serde.NewDeserializerFromYAML(cfg.Deserializer); err != nil {
 			return nil, err
 		}
 		cfg.DB = config.Storage

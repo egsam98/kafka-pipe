@@ -12,6 +12,7 @@ import (
 	"github.com/go-playground/validator/v10"
 	entrans "github.com/go-playground/validator/v10/translations/en"
 	"github.com/pkg/errors"
+	"gopkg.in/yaml.v3"
 )
 
 var validate = validator.New(validator.WithRequiredStructEnabled())
@@ -35,28 +36,27 @@ func init() {
 	}
 }
 
-func Struct(src any, namespace ...string) error {
-	err := validate.Struct(src)
+func Struct(dst any) error {
+	err := validate.Struct(dst)
 	var vErrs validator.ValidationErrors
 	if !errors.As(err, &vErrs) {
 		return err
 	}
 
-	var buf strings.Builder
+	errs := make(Errors, len(vErrs))
 	for i, fe := range vErrs {
-		if i > 0 {
-			buf.WriteString("; ")
-		}
-		for _, s := range namespace {
-			buf.WriteString(s)
-			buf.WriteByte(':')
-		}
 		_, pathPrefix, _ := strings.Cut(fe.Namespace(), ".")
 		pathPrefix = strings.ReplaceAll(strings.TrimSuffix(pathPrefix, fe.Field()), ".", ":")
-		buf.WriteString(pathPrefix)
-		buf.WriteString(fe.Translate(trans))
+		errs[i] = pathPrefix + fe.Translate(trans)
 	}
-	return errors.New(buf.String())
+	return errs
+}
+
+func StructFromYAML(dst any, value yaml.Node) error {
+	if err := value.Decode(dst); err != nil {
+		return errors.Wrapf(err, "decode yaml %q into %T", value.Value, dst)
+	}
+	return Struct(dst)
 }
 
 func validateDefault(fl validator.FieldLevel) bool {
