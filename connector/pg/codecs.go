@@ -73,7 +73,7 @@ func (c TimestampCodec) DecodeValue(m *pgtype.Map, oid uint32, format int16, src
 		if err != nil {
 			return nil, err
 		}
-		return t.UnixMicro(), nil
+		return t.UnixMilli(), nil
 	case pgtype.BinaryFormatCode:
 		res, err := c.TimestampCodec.DecodeValue(m, oid, format, src)
 		if err != nil {
@@ -81,7 +81,7 @@ func (c TimestampCodec) DecodeValue(m *pgtype.Map, oid uint32, format int16, src
 		}
 		switch res := res.(type) {
 		case time.Time:
-			return res.UnixMicro(), nil
+			return res.UnixMilli(), nil
 		case pgtype.InfinityModifier:
 			if res == pgtype.Infinity {
 				return math.MaxInt64, nil
