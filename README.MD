@@ -155,7 +155,7 @@ Config parameters
         <td></td>
         <td>
             Deserializer's format for Kafka messages (key & value). Default is <code>json</code>. 
-            Additional settings for every deserializer format is described <a href="#serde">here</a>
+            Additional settings for every deserializer format are described <a href="#serde">here</a>
         </td>
     </tr>
 </table>
