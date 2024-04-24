@@ -46,12 +46,14 @@ func (s *Sink) Run(ctx context.Context) error {
 	for _, topic := range s.cfg.Kafka.Topics {
 		for range s.cfg.Kafka.WorkersPerTopic {
 			consum, err := kgox.NewConsumer(kgox.ConsumerConfig{
-				Brokers:          s.cfg.Kafka.Brokers,
-				Topics:           []string{topic},
-				Group:            s.cfg.Name + "-" + topic,
-				BatchSize:        s.cfg.Kafka.Batch.Size,
-				BatchTimeout:     s.cfg.Kafka.Batch.Timeout,
-				RebalanceTimeout: s.cfg.Kafka.RebalanceTimeout,
+				Brokers:                s.cfg.Kafka.Brokers,
+				Topics:                 []string{topic},
+				Group:                  s.cfg.Name + "-" + topic,
+				FetchMaxBytes:          s.cfg.Kafka.FetchMaxBytes,
+				FetchMaxPartitionBytes: s.cfg.Kafka.FetchMaxPartitionBytes,
+				BatchSize:              s.cfg.Kafka.Batch.Size,
+				BatchTimeout:           s.cfg.Kafka.Batch.Timeout,
+				RebalanceTimeout:       s.cfg.Kafka.RebalanceTimeout,
 			})
 			if err != nil {
 				return err

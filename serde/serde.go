@@ -22,6 +22,8 @@ func NewDeserializerFromYAML(value yaml.Node) (Deserializer, error) {
 	var de Deserializer
 	var err error
 	switch format.Value {
+	case "":
+		fallthrough
 	case "json":
 		de, err = newJSONFromYAML(value)
 	case "avro":

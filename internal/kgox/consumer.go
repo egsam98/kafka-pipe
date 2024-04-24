@@ -17,10 +17,13 @@ type Consumer struct {
 }
 
 type ConsumerConfig struct {
-	Brokers, Topics                []string
-	Group                          string
-	BatchSize                      int
-	BatchTimeout, RebalanceTimeout time.Duration
+	Brokers, Topics        []string
+	Group                  string
+	BatchSize              uint
+	FetchMaxBytes          uint // default 50MB
+	FetchMaxPartitionBytes uint // default 1MB
+	BatchTimeout           time.Duration
+	RebalanceTimeout       time.Duration // default 1m
 }
 
 func NewConsumer(cfg ConsumerConfig) (*Consumer, error) {
@@ -29,16 +32,26 @@ func NewConsumer(cfg ConsumerConfig) (*Consumer, error) {
 		log: NewLogger(&log.Logger),
 	}
 
-	var err error
-	if c.Client, err = kgo.NewClient(
+	opts := []kgo.Opt{
 		kgo.SeedBrokers(cfg.Brokers...),
 		kgo.ConsumeTopics(cfg.Topics...),
 		kgo.ConsumerGroup(cfg.Group),
 		kgo.BlockRebalanceOnPoll(),
-		kgo.RebalanceTimeout(cfg.RebalanceTimeout),
 		kgo.DisableAutoCommit(),
 		kgo.WithLogger(&c.log),
-	); err != nil {
+	}
+	if cfg.RebalanceTimeout > 0 {
+		opts = append(opts, kgo.RebalanceTimeout(cfg.RebalanceTimeout))
+	}
+	if cfg.FetchMaxBytes > 0 {
+		opts = append(opts, kgo.FetchMaxBytes(int32(cfg.FetchMaxBytes)))
+	}
+	if cfg.FetchMaxPartitionBytes > 0 {
+		opts = append(opts, kgo.FetchMaxPartitionBytes(int32(cfg.FetchMaxPartitionBytes)))
+	}
+
+	var err error
+	if c.Client, err = kgo.NewClient(opts...); err != nil {
 		return nil, errors.Wrap(err, "Kafka: Init consumer")
 	}
 	if err := c.Ping(context.Background()); err != nil {
@@ -71,7 +84,7 @@ func (c *Consumer) poll(ctx context.Context, handler Handler) error {
 	case <-timer.C:
 	}
 
-	batch := c.PollRecords(nil, c.cfg.BatchSize) //nolint:staticcheck
+	batch := c.PollRecords(nil, int(c.cfg.BatchSize)) //nolint:staticcheck
 	if len(batch) == 0 {
 		return nil
 	}
