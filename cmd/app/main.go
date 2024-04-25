@@ -18,11 +18,13 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/egsam98/kafka-pipe/connector"
+	_ "github.com/egsam98/kafka-pipe/connector/ch/sink"
 	_ "github.com/egsam98/kafka-pipe/connector/pg/snapshot"
 	_ "github.com/egsam98/kafka-pipe/connector/pg/source"
 	_ "github.com/egsam98/kafka-pipe/connector/s3/backup"
 	_ "github.com/egsam98/kafka-pipe/connector/s3/sink"
 	"github.com/egsam98/kafka-pipe/internal/badgerx"
+	"github.com/egsam98/kafka-pipe/internal/validate"
 	"github.com/egsam98/kafka-pipe/version"
 )
 
@@ -38,8 +40,8 @@ func main() {
 }
 
 type PreConfig struct {
-	Name  string `yaml:"name"`
-	Class string `yaml:"class"`
+	Name  string `yaml:"name" validate:"required"`
+	Class string `yaml:"class" validate:"required"`
 	Log   struct {
 		Pretty bool          `yaml:"pretty"`
 		Level  zerolog.Level `yaml:"level"`
@@ -50,13 +52,7 @@ func (c *PreConfig) Parse(src []byte) error {
 	if err := yaml.Unmarshal(src, c); err != nil {
 		return errors.Wrap(err, "decode config class")
 	}
-	if c.Name == "" {
-		return errors.New(`"name" parameter is required`)
-	}
-	if c.Class == "" {
-		return errors.New(`"class" parameter is required`)
-	}
-	return nil
+	return validate.Struct(c)
 }
 
 func run() error {

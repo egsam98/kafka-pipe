@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/egsam98/kafka-pipe/connector/pg"
 	"github.com/egsam98/kafka-pipe/internal/set"
+	"github.com/egsam98/kafka-pipe/internal/validate"
 	"github.com/egsam98/kafka-pipe/version"
 )
 
@@ -64,6 +66,18 @@ func NewSource(cfg Config) *Source {
 }
 
 func (s *Source) Run(ctx context.Context) error {
+	if err := validate.Struct(&s.cfg); err != nil {
+		return err
+	}
+	// Add replication=database query param
+	pgUrl, _ := url.Parse(s.cfg.Pg.Url)
+	pgQuery := pgUrl.Query()
+	if !pgQuery.Has("replication") {
+		pgQuery.Set("replication", "database")
+		pgUrl.RawQuery = pgQuery.Encode()
+		s.cfg.Pg.Url = pgUrl.String()
+	}
+
 	var err error
 	if s.topicResolver, err = newTopicResolver(&s.cfg); err != nil {
 		return err

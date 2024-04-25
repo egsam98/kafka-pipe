@@ -1,14 +1,10 @@
 package set
 
-import (
-	"cmp"
-)
-
-type Set[T cmp.Ordered] struct {
+type Set[T comparable] struct {
 	m map[T]struct{}
 }
 
-func NewSet[T cmp.Ordered]() *Set[T] {
+func NewSet[T comparable]() *Set[T] {
 	return &Set[T]{m: make(map[T]struct{})}
 }
 

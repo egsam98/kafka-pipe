@@ -11,7 +11,7 @@ https://hub.docker.com/r/egsam98/kafka-pipe/tags
 | [s3.Sink](#s3sink)         | Kafka      | S3    |
 | [s3.Backup](#s3backup)     | S3         | Kafka |
 
-# Overview
+# Get started
 To start application you need to pass YAML-based configuration.
 Common parameters of config:
 ```yaml
@@ -65,9 +65,126 @@ Config parameters
 | kafka:batch:size               |          | Producer's batch size. Default is `10000`                                                       |
 | kafka:batch:timeout            |          | Producer's batch timeout. Default is `5s`                                                       |
 
+## ch.Sink
+Transmits events from Kafka topics to ClickHouse. For every consumed topic group ID is created as `{connector_name}-{topic}`.
+
+Config parameters
+
+<table>
+    <tr>
+        <th>Name</th>
+        <th>Required</th>
+        <th>Description</th>
+    </tr>
+    <tr>
+        <td>kafka:brokers</td>
+        <td>+</td>
+        <td>List of Kafka brokers. Format is {hostname}:{port}</td>
+    </tr>
+    <tr>
+        <td>kafka:topics</td>
+        <td>+</td>
+        <td>Topics to read from</td>
+    </tr>
+    <tr>
+        <td>kafka:rebalance_timeout</td>
+        <td></td>
+        <td>
+            How long all members are allowed to complete work and commit offsets, minus the time it took to detect the rebalance (from a heartbeat). 
+            Default is <code>1m</code>
+        </td>
+    </tr>
+    <tr>
+        <td>kafka:workers_per_topic</td>
+        <td></td>
+        <td>Number of workers (consumers) per 1 topic. Default is <code>1</code></td>
+    </tr>
+    <tr>
+        <td>kafka:batch:size</td>
+        <td></td>
+        <td>Consumer's batch size. Default is <code>10000</code></td>
+    </tr>
+    <tr>
+        <td>kafka:batch:timeout</td>
+        <td></td>
+        <td>Consumer's batch timeout. Default is <code>5s</code></td>
+    </tr>
+    <tr>
+        <td>kafka:fetch_max_bytes</td>
+        <td></td>
+        <td>
+            Maximum amount of bytes a broker will try to send during a fetch.
+            Note that brokers may not obey this limit if it has records larger than this limit. Also note that this 
+            client sends a fetch to each broker concurrently, meaning the client will buffer up to brokers * max bytes worth of memory. 
+            This corresponds to the Java fetch.max.bytes setting.
+            Default: <code>52428800</code> (50MB)
+        </td>
+    </tr>
+    <tr>
+        <td>kafka:fetch_max_partition_bytes</td>
+        <td></td>
+        <td>
+            Maximum amount of bytes that will be consumed for a single partition in a fetch request. 
+            Note that if a single batch is larger than this number, that batch will still be returned so the client can make progress.
+            This corresponds to the Java max.partition.fetch.bytes setting.
+            Default: <code>1048576</code> (1MB)
+        </td>
+    </tr>
+    <tr>
+        <td>click_house:addrs</td>
+        <td>+</td>
+        <td>ClickHouse addresses list to connect</td>
+    </tr>
+    <tr>
+        <td>click_house:database</td>
+        <td>+</td>
+        <td>Database name</td>
+    </tr>
+    <tr>
+        <td>click_house:user</td>
+        <td>+</td>
+        <td>Username credential</td>
+    </tr>
+    <tr>
+        <td>click_house:password</td>
+        <td></td>
+        <td>Password credential</td>
+    </tr>
+    <tr>
+        <td>deserializer:format</td>
+        <td></td>
+        <td>
+            Deserializer's format for Kafka messages (key & value). Default is <code>json</code>. 
+            Additional settings for every deserializer format are described <a href="#serde">here</a>
+        </td>
+    </tr>
+</table>
+
 ## s3.Sink
 No description
 
 ## s3.Backup
 No description
 
+## Serde
+<p id="serde"></p>
+i.e. Serialization and Deserialization.
+Supported formats: `json`, `avro`.
+Depending on the selected format, different settings are provided:
+
+### json
+| Name        | Required | Description                                                                                                  |
+|-------------|----------|--------------------------------------------------------------------------------------------------------------|
+| time_format |          | Datetime formatter, possible values: `rfc3339`, `timestamp`, `timestamp-milli`. Default is `timestamp-milli` |
+
+### avro
+| Name       | Required | Description                                                                                                                                     |
+|------------|----------|-------------------------------------------------------------------------------------------------------------------------------------------------|
+| schema_uri | +        | Avro schema's source URI. Supported HTTP schemas: `file` (local download), `http(-s)` (download via HTTP protocol). Example: file://schema.avro |
+
+Example of deserializer configuration:
+```yaml
+deserializer:
+  format: json
+  time_format: rfc3339
+```
