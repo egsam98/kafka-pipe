@@ -147,8 +147,8 @@ func (s *Sink) writeToCH(ctx context.Context, fetches kgo.Fetches) error {
 			continue
 		}
 		data := reflect.New(structType).Interface()
-		if err := s.cfg.Deserializer.Deserialize(data, rec.Value); err != nil {
-			return errors.Wrapf(err, "Deserialize message %q using %T", string(rec.Value), s.cfg.Deserializer)
+		if err := s.cfg.Serde.Deserialize(data, rec.Value); err != nil {
+			return errors.Wrapf(err, "Deserialize message %q using %T", string(rec.Value), s.cfg.Serde)
 		}
 		if err := batch.AppendStruct(data); err != nil {
 			return errors.Wrap(err, "ClickHouse")

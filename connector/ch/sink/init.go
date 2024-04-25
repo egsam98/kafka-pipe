@@ -11,14 +11,14 @@ import (
 func init() {
 	connector.Register("ch.Sink", func(config connector.Config) (connector.Connector, error) {
 		var cfg struct {
-			Config       `yaml:",inline"`
-			Deserializer yaml.Node `yaml:"deserializer"`
+			Config `yaml:",inline"`
+			Serde  yaml.Node `yaml:"serde"`
 		}
 		if err := yaml.Unmarshal(config.Raw, &cfg); err != nil {
 			return nil, errors.Wrap(err, "parse sink config")
 		}
 		var err error
-		if cfg.Config.Deserializer, err = serde.NewDeserializerFromYAML(cfg.Deserializer); err != nil {
+		if cfg.Config.Serde, err = serde.NewFromYAML(cfg.Serde); err != nil {
 			return nil, err
 		}
 		cfg.DB = config.Storage

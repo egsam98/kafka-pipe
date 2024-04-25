@@ -151,14 +151,26 @@ Config parameters
         <td>Password credential</td>
     </tr>
     <tr>
-        <td>deserializer:format</td>
+        <td>serde:format</td>
         <td></td>
         <td>
-            Deserializer's format for Kafka messages (key & value). Default is <code>json</code>. 
-            Additional settings for every deserializer format are described <a href="#serde">here</a>
+            Serde's format for Kafka messages (key & value). Default is <code>json</code>. 
+            Additional settings for every Serde format are described <a href="#serde">here</a>
         </td>
     </tr>
 </table>
+
+Non-YAML configuration (available if you use connector as go-module):
+
+```go 
+func BeforeInsert(ctx context.Context, batch []*kgo.Record) error
+```
+Hook function that's called per every consumed batch before inserting one into ClickHouse. By reasons of reducing extra 
+memory allocations you want to directly modify the slice of records. If you want to exclude(filter) particular records from batch 
+you can erase them by index, i.e.
+```go 
+batch[i] = nil
+```
 
 ## s3.Sink
 No description
@@ -182,9 +194,9 @@ Depending on the selected format, different settings are provided:
 |------------|----------|-------------------------------------------------------------------------------------------------------------------------------------------------|
 | schema_uri | +        | Avro schema's source URI. Supported HTTP schemas: `file` (local download), `http(-s)` (download via HTTP protocol). Example: file://schema.avro |
 
-Example of deserializer configuration:
+Example of Serde configuration:
 ```yaml
-deserializer:
+serde:
   format: json
   time_format: rfc3339
 ```

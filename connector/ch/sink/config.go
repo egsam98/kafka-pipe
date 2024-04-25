@@ -30,7 +30,7 @@ type Config struct {
 		Password string   `yaml:"password"`
 		Addrs    []string `yaml:"addrs" validate:"min=1,dive,url"`
 	} `yaml:"click_house"`
-	Deserializer serde.Deserializer                                   `yaml:"-" validate:"required"`
+	Serde        serde.Serde                                          `yaml:"-" validate:"required"`
 	DB           *badger.DB                                           `yaml:"-" validate:"required"`
 	BeforeInsert func(ctx context.Context, batch []*kgo.Record) error `yaml:"-"`
 }
