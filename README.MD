@@ -1,15 +1,25 @@
 ![](/icon.png)
 
 # Install
+Docker image:
+```shell
+docker pull egsam98/kafka-pipe:{tag}
+```
 https://hub.docker.com/r/egsam98/kafka-pipe/tags
 
+Go module:
+```shell
+go get github.com/egsam98/kafka-pipe
+```
+
 # Supported classes:
-| Class                      | Source     | Sink  |
-|----------------------------|------------|-------|
-| [pg.Source](#pgsource)     | PostgreSQL | Kafka |
-| [pg.Snapshot](#pgsnapshot) | PostgreSQL | Kafka |
-| [s3.Sink](#s3sink)         | Kafka      | S3    |
-| [s3.Backup](#s3backup)     | S3         | Kafka |
+| Class                      | Source     | Sink       |
+|----------------------------|------------|------------|
+| [pg.Source](#pgsource)     | PostgreSQL | Kafka      |
+| [pg.Snapshot](#pgsnapshot) | PostgreSQL | Kafka      |
+| [ch.Sink](#chsink)         | Kafka      | ClickHouse |
+| [s3.Sink](#s3sink)         | Kafka      | S3         |
+| [s3.Backup](#s3backup)     | S3         | Kafka      |
 
 # Get started
 To start application you need to pass YAML-based configuration.
