@@ -26,8 +26,8 @@ github.com/dgryski/go-farm v0.0.0-20190423205320-6a90982ecee2/go.mod h1:SqUrOPUn
 github.com/dustin/go-humanize v1.0.0/go.mod h1:HtrtbFcZ19U5GC7JDqmcUSB87Iq5E25KnS6fMYU6eOk=
 github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=
 github.com/dustin/go-humanize v1.0.1/go.mod h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=
-github.com/egsam98/clickhouse-go/v2 v2.23.2-0.20240418120604-3b9512af0982 h1:Fi3V9zlW3QDNIvU4aebY4qOHTRVZq7xOLXGJvz8vSBw=
-github.com/egsam98/clickhouse-go/v2 v2.23.2-0.20240418120604-3b9512af0982/go.mod h1:aNap51J1OM3yxQJRgM+AlP/MPkGBCL8A74uQThoQhR0=
+github.com/egsam98/clickhouse-go/v2 v2.23.2-0.20240430110930-0ff4b8e443a5 h1:lFJqQYkVLnsNjrr2HSfuaBFjV8m1uERR42c9sxkK+zs=
+github.com/egsam98/clickhouse-go/v2 v2.23.2-0.20240430110930-0ff4b8e443a5/go.mod h1:aNap51J1OM3yxQJRgM+AlP/MPkGBCL8A74uQThoQhR0=
 github.com/fatih/color v1.14.1 h1:qfhVLaG5s+nCROl1zJsZRxFeYrHLqWroPOQ8BWiNb4w=
 github.com/fatih/color v1.14.1/go.mod h1:2oHN61fhTpgcxD3TSWCgKDiH1+x4OiDVVGH8WlgGZGg=
 github.com/gabriel-vasile/mimetype v1.4.3 h1:in2uUcidCuFcDKtdcBxlR0rJ1+fsokWf+uqxgUFjbI0=

@@ -9,8 +9,8 @@ import (
 	"sync"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/column"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
-	"github.com/ClickHouse/clickhouse-go/v2/lib/proto"
 	"github.com/dgraph-io/badger/v4"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
@@ -137,7 +137,7 @@ func (s *Sink) writeToCH(ctx context.Context, fetches kgo.Fetches) error {
 	}
 	defer batch.Abort() //nolint:errcheck
 
-	structType, err := tableSchema(batch.Block())
+	structType, err := tableSchema(batch.Columns())
 	if err != nil {
 		return err
 	}
@@ -171,9 +171,9 @@ func (s *Sink) writeToCH(ctx context.Context, fetches kgo.Fetches) error {
 	return nil
 }
 
-func tableSchema(block proto.Block) (reflect.Type, error) {
-	fields := make([]reflect.StructField, len(block.Columns))
-	for i, col := range block.Columns {
+func tableSchema(columns []column.Interface) (reflect.Type, error) {
+	fields := make([]reflect.StructField, len(columns))
+	for i, col := range columns {
 		name := col.Name()
 		fields[i] = reflect.StructField{
 			Name: cases.Title(language.Und).String(name),
