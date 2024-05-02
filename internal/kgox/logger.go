@@ -7,28 +7,24 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-type Logger struct {
+type logger struct {
 	*zerolog.Logger
 	prevErr error
 	errs    chan error
 }
 
-func NewLogger(base *zerolog.Logger) Logger {
-	return Logger{
+func newLogger(base *zerolog.Logger) logger {
+	return logger{
 		Logger: base,
 		errs:   make(chan error),
 	}
 }
 
-func (l *Logger) Errors() <-chan error {
-	return l.errs
-}
-
-func (l *Logger) Level() kgo.LogLevel {
+func (l *logger) Level() kgo.LogLevel {
 	return zeroLvls[l.GetLevel()]
 }
 
-func (l *Logger) Log(level kgo.LogLevel, msg string, keyVals ...any) {
+func (l *logger) Log(level kgo.LogLevel, msg string, keyVals ...any) {
 	if idx := slices.Index(keyVals, "err"); idx != -1 {
 		err := keyVals[idx+1].(error)
 		if l.prevErr == err {
@@ -41,6 +37,10 @@ func (l *Logger) Log(level kgo.LogLevel, msg string, keyVals ...any) {
 		l.prevErr = err
 	}
 	l.Logger.WithLevel(kgoLvls[level]).Fields(keyVals).Msg("Kafka: " + msg)
+}
+
+func (l *logger) errors() <-chan error {
+	return l.errs
 }
 
 var kgoLvls = map[kgo.LogLevel]zerolog.Level{

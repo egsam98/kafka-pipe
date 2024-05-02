@@ -13,7 +13,7 @@ import (
 type Consumer struct {
 	*kgo.Client
 	cfg ConsumerConfig
-	log Logger
+	log logger
 }
 
 type ConsumerConfig struct {
@@ -29,7 +29,7 @@ type ConsumerConfig struct {
 func NewConsumer(cfg ConsumerConfig) (*Consumer, error) {
 	c := &Consumer{
 		cfg: cfg,
-		log: NewLogger(&log.Logger),
+		log: newLogger(&log.Logger),
 	}
 
 	opts := []kgo.Opt{
@@ -98,7 +98,7 @@ func (c *Consumer) poll(ctx context.Context, handler Handler) error {
 	go func() {
 		select {
 		case <-handleCtx.Done():
-		case err := <-c.log.Errors():
+		case err := <-c.log.errors():
 			if errors.Is(err, kerr.RebalanceInProgress) {
 				handleCancel(err)
 			}
