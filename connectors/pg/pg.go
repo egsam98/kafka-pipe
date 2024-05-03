@@ -37,7 +37,7 @@ func registerTypes(typeMap *pgtype.Map) {
 	})
 }
 
-func KafkaKey(data map[string]any) ([]byte, error) {
+func kafkaKey(data map[string]any) ([]byte, error) {
 	dataID, ok := data["id"]
 	if !ok {
 		return nil, errors.Errorf(`default ID key "id" is not specified for data: %v`, data)

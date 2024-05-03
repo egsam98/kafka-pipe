@@ -126,7 +126,7 @@ func (s *Snapshot) query(ctx context.Context, table string) error {
 			produceErr = errors.Wrap(err, "scan into map")
 			break
 		}
-		key, err := KafkaKey(data)
+		key, err := kafkaKey(data)
 		if err != nil {
 			produceErr = errors.Wrap(err, "scan into map")
 			break

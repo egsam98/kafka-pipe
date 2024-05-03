@@ -416,7 +416,7 @@ func (s *Source) produceMessages(msgs <-chan WALMessage) error {
 				return errors.Wrapf(err, "marshal WAL message data: %+v", msg.Data)
 			}
 
-			key, err := KafkaKey(msg.Data)
+			key, err := kafkaKey(msg.Data)
 			if err != nil {
 				return err
 			}
