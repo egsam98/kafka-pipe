@@ -17,11 +17,11 @@ import (
 	"github.com/rs/zerolog/pkgerrors"
 	"gopkg.in/yaml.v3"
 
-	kafkapipe "github.com/egsam98/kafka-pipe"
-	_ "github.com/egsam98/kafka-pipe/ch"
+	"github.com/egsam98/kafka-pipe"
+	_ "github.com/egsam98/kafka-pipe/connectors/ch"
+	_ "github.com/egsam98/kafka-pipe/connectors/pg"
+	_ "github.com/egsam98/kafka-pipe/connectors/s3"
 	"github.com/egsam98/kafka-pipe/internal/registry"
-	_ "github.com/egsam98/kafka-pipe/pg"
-	_ "github.com/egsam98/kafka-pipe/s3"
 
 	"github.com/egsam98/kafka-pipe/internal/badgerx"
 	"github.com/egsam98/kafka-pipe/internal/validate"
