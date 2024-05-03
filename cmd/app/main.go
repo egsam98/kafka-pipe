@@ -17,15 +17,14 @@ import (
 	"github.com/rs/zerolog/pkgerrors"
 	"gopkg.in/yaml.v3"
 
-	"github.com/egsam98/kafka-pipe/connector"
-	_ "github.com/egsam98/kafka-pipe/connector/ch/sink"
-	_ "github.com/egsam98/kafka-pipe/connector/pg/snapshot"
-	_ "github.com/egsam98/kafka-pipe/connector/pg/source"
-	_ "github.com/egsam98/kafka-pipe/connector/s3/backup"
-	_ "github.com/egsam98/kafka-pipe/connector/s3/sink"
+	kafkapipe "github.com/egsam98/kafka-pipe"
+	_ "github.com/egsam98/kafka-pipe/ch"
+	"github.com/egsam98/kafka-pipe/internal/registry"
+	_ "github.com/egsam98/kafka-pipe/pg"
+	_ "github.com/egsam98/kafka-pipe/s3"
+
 	"github.com/egsam98/kafka-pipe/internal/badgerx"
 	"github.com/egsam98/kafka-pipe/internal/validate"
-	"github.com/egsam98/kafka-pipe/version"
 )
 
 const HealthAddr = ":8081"
@@ -35,7 +34,7 @@ func main() {
 	zerolog.ErrorStackMarshaler = pkgerrors.MarshalStack
 	zerolog.TimeFieldFormat = time.RFC3339Nano
 	if err := run(); err != nil {
-		log.Fatal().Stack().Err(err).Msg("Start Kafka Pipe")
+		log.Fatal().Stack().Err(err).Str("version", kafkapipe.Version).Msg("Start Kafka Pipe")
 	}
 }
 
@@ -87,7 +86,7 @@ func run() error {
 		return errors.Wrapf(err, "open Badger %q", DataFolder)
 	}
 
-	conn, err := connector.Get(cfg.Class, connector.Config{
+	conn, err := registry.Get(cfg.Class, registry.Config{
 		Raw:     raw,
 		Storage: stor,
 	})
@@ -103,7 +102,7 @@ func run() error {
 	log.Info().
 		Str("name", cfg.Name).
 		Str("class", cfg.Class).
-		Str("version", version.Version).
+		Str("version", kafkapipe.Version).
 		Msg("Run connector")
 	if err := conn.Run(ctx); err != nil {
 		return err

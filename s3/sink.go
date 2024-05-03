@@ -1,4 +1,4 @@
-package sink
+package s3
 
 import (
 	"bytes"
@@ -15,19 +15,18 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/twmb/franz-go/pkg/kgo"
 
-	"github.com/egsam98/kafka-pipe/connector"
-	"github.com/egsam98/kafka-pipe/connector/s3"
+	"github.com/egsam98/kafka-pipe/internal/registry"
 )
 
 type Sink struct {
 	wg    sync.WaitGroup
-	cfg   Config
+	cfg   SinkConfig
 	kafka *kgo.Client
 	s3    *minio.Client
 }
 
-func NewSink(config connector.Config) (*Sink, error) {
-	var cfg Config
+func NewSink(config registry.Config) (*Sink, error) {
+	var cfg SinkConfig
 	if err := cfg.Parse(config.Raw); err != nil {
 		return nil, err
 	}
@@ -135,7 +134,7 @@ func (s *Sink) listenRecords(ctx context.Context, records <-chan *kgo.Record) {
 				continue
 			}
 
-			key := rec.Timestamp.UTC().Round(s.cfg.S3.Flush.Timeout).Format(s3.TimeFmt)
+			key := rec.Timestamp.UTC().Round(s.cfg.S3.Flush.Timeout).Format(TimeFmt)
 			parts[key] = append(parts[key], rec)
 			offsets[rec.Partition] = rec.Offset
 			if len(parts[key]) < s.cfg.S3.Flush.Size {
@@ -183,7 +182,7 @@ func (s *Sink) uploadToS3(filename string, records []*kgo.Record) error {
 	gzw := gzip.NewWriter(&buf)
 	_, _ = gzw.Write([]byte{'['})
 	for i, record := range records {
-		b, err := json.Marshal(s3.NewRecord(record))
+		b, err := json.Marshal(newRecord(record))
 		if err != nil {
 			return errors.Wrap(err, "marshal Kafka record's data")
 		}

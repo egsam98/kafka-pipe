@@ -1,4 +1,4 @@
-package snapshot
+package pg
 
 import (
 	"context"
@@ -18,19 +18,18 @@ import (
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 
-	"github.com/egsam98/kafka-pipe/connector/pg"
+	kafkapipe "github.com/egsam98/kafka-pipe"
 	"github.com/egsam98/kafka-pipe/internal/validate"
-	"github.com/egsam98/kafka-pipe/version"
 )
 
 type Snapshot struct {
-	cfg   Config
+	cfg   SnapshotConfig
 	db    *pgxpool.Pool
 	pgCfg pgxpool.Config
 	kafka *kgo.Client
 }
 
-func NewSnapshot(cfg Config) *Snapshot {
+func NewSnapshot(cfg SnapshotConfig) *Snapshot {
 	return &Snapshot{cfg: cfg}
 }
 
@@ -44,7 +43,7 @@ func (s *Snapshot) Run(ctx context.Context) error {
 		return errors.Wrap(err, "parse PostgreSQL connection URL")
 	}
 	pgCfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
-		pg.RegisterTypes(conn.TypeMap())
+		registerTypes(conn.TypeMap())
 		return nil
 	}
 	s.pgCfg = *pgCfg
@@ -127,7 +126,7 @@ func (s *Snapshot) query(ctx context.Context, table string) error {
 			produceErr = errors.Wrap(err, "scan into map")
 			break
 		}
-		key, err := pg.KafkaKey(data)
+		key, err := KafkaKey(data)
 		if err != nil {
 			produceErr = errors.Wrap(err, "scan into map")
 			break
@@ -149,7 +148,7 @@ func (s *Snapshot) query(ctx context.Context, table string) error {
 			Headers: []kgo.RecordHeader{
 				{
 					Key:   "version",
-					Value: []byte(version.Version),
+					Value: []byte(kafkapipe.Version),
 				},
 				{
 					Key:   "ts_ms",

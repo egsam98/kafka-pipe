@@ -1,4 +1,4 @@
-package sink
+package ch
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 	"github.com/egsam98/kafka-pipe/serde"
 )
 
-type Config struct {
+type SinkConfig struct {
 	Name  string `yaml:"name" validate:"required"`
 	Kafka struct {
 		Brokers                []string      `yaml:"brokers" validate:"min=1,dive,url"`

@@ -1,4 +1,4 @@
-package source
+package pg
 
 import (
 	"regexp"
@@ -9,7 +9,7 @@ import (
 
 // topicResolver resolves Kafka topic name by Postgres relation regular expressions
 type topicResolver struct {
-	cfg    *Config
+	cfg    *SourceConfig
 	routes []relationTopic
 	cache  map[string]string // map[pg relation]kafka topic
 }
@@ -19,7 +19,7 @@ type relationTopic struct {
 	kafkaTopic string
 }
 
-func newTopicResolver(cfg *Config) (topicResolver, error) {
+func newTopicResolver(cfg *SourceConfig) (topicResolver, error) {
 	res := topicResolver{
 		cfg:    cfg,
 		routes: make([]relationTopic, 0, len(cfg.Kafka.Topic.Routes)),

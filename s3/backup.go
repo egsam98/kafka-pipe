@@ -1,4 +1,4 @@
-package backup
+package s3
 
 import (
 	"compress/gzip"
@@ -14,18 +14,17 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/twmb/franz-go/pkg/kgo"
 
-	"github.com/egsam98/kafka-pipe/connector"
-	"github.com/egsam98/kafka-pipe/connector/s3"
+	"github.com/egsam98/kafka-pipe/internal/registry"
 )
 
 type Backup struct {
-	cfg   Config
+	cfg   BackupConfig
 	s3    *minio.Client
 	kafka *kgo.Client
 }
 
-func NewBackup(config connector.Config) (*Backup, error) {
-	var cfg Config
+func NewBackup(config registry.Config) (*Backup, error) {
+	var cfg BackupConfig
 	if err := cfg.Parse(config.Raw); err != nil {
 		return nil, err
 	}
@@ -89,7 +88,7 @@ func (b *Backup) handleObjects(ctx context.Context, topic string) error {
 			produceErr = errors.Wrapf(objInfo.Err, "object %s", objInfo.Key)
 			break
 		}
-		t, err := time.Parse(topic+"/"+s3.TimeFmt+".json.gz", objInfo.Key)
+		t, err := time.Parse(topic+"/"+TimeFmt+".json.gz", objInfo.Key)
 		if err != nil {
 			produceErr = errors.Wrapf(err, "object %s", objInfo.Key)
 			break
@@ -109,7 +108,7 @@ func (b *Backup) handleObjects(ctx context.Context, topic string) error {
 			produceErr = errors.Wrap(err, "gzip reader")
 			break
 		}
-		var records []s3.Record
+		var records []record
 		if err := json.NewDecoder(r).Decode(&records); err != nil {
 			produceErr = errors.Wrap(err, "decode record")
 			break

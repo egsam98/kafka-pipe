@@ -1,4 +1,4 @@
-package sink
+package ch
 
 import (
 	"cmp"
@@ -23,13 +23,13 @@ import (
 )
 
 type Sink struct {
-	cfg        Config
+	cfg        SinkConfig
 	consumers  []*kgox.Consumer
 	chConn     driver.Conn
 	batchState *batchState
 }
 
-func NewSink(cfg Config) *Sink {
+func NewSink(cfg SinkConfig) *Sink {
 	return &Sink{cfg: cfg}
 }
 

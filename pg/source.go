@@ -1,4 +1,4 @@
-package source
+package pg
 
 import (
 	"context"
@@ -23,17 +23,16 @@ import (
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 
-	"github.com/egsam98/kafka-pipe/connector/pg"
+	kafkapipe "github.com/egsam98/kafka-pipe"
 	"github.com/egsam98/kafka-pipe/internal/set"
 	"github.com/egsam98/kafka-pipe/internal/validate"
-	"github.com/egsam98/kafka-pipe/version"
 )
 
 const Plugin = "pgoutput"
 const KafkaProduceBatchTimeout = time.Minute
 
 type Source struct {
-	cfg           Config
+	cfg           SourceConfig
 	pgCfg         pgxpool.Config
 	kafka         *kgo.Client
 	replConn      *pgconn.PgConn
@@ -51,13 +50,13 @@ type WALMessage struct {
 	Data       map[string]any
 }
 
-func NewSource(cfg Config) *Source {
+func NewSource(cfg SourceConfig) *Source {
 	s := &Source{
 		cfg:       cfg,
 		relations: make(map[uint32]*pglogrepl.RelationMessage),
 		typeMap:   pgtype.NewMap(),
 	}
-	pg.RegisterTypes(s.typeMap)
+	registerTypes(s.typeMap)
 	s.log = log.Logger.
 		With().
 		Logger().
@@ -165,7 +164,7 @@ func (s *Source) startReplication(ctx context.Context) error {
 	switch _, err := s.db.Exec(ctx, sql); {
 	case err == nil:
 		s.log.Info().Msg("PostgreSQL: " + sql)
-	case pg.Is(err, pg.DuplicateObject):
+	case Is(err, DuplicateObject):
 		sql := fmt.Sprintf("ALTER PUBLICATION %s SET TABLE %s", s.cfg.Pg.Publication, tables)
 		s.log.Info().Msg("PostgreSQL: " + sql)
 		if _, err := s.db.Exec(ctx, sql); err != nil {
@@ -185,7 +184,7 @@ func (s *Source) startReplication(ctx context.Context) error {
 	); {
 	case err == nil:
 		s.log.Info().Msgf("PostgreSQL: Create replication slot %q", s.cfg.Pg.Slot)
-	case pg.Is(err, pg.DuplicateObject): // Ignore
+	case Is(err, DuplicateObject): // Ignore
 	default:
 		return errors.Wrapf(err, "create replication slot %q", s.cfg.Pg.Slot)
 	}
@@ -417,7 +416,7 @@ func (s *Source) produceMessages(msgs <-chan WALMessage) error {
 				return errors.Wrapf(err, "marshal WAL message data: %+v", msg.Data)
 			}
 
-			key, err := pg.KafkaKey(msg.Data)
+			key, err := KafkaKey(msg.Data)
 			if err != nil {
 				return err
 			}
@@ -429,7 +428,7 @@ func (s *Source) produceMessages(msgs <-chan WALMessage) error {
 				Headers: []kgo.RecordHeader{
 					{
 						Key:   "version",
-						Value: []byte(version.Version),
+						Value: []byte(kafkapipe.Version),
 					},
 					{
 						Key:   "lsn",

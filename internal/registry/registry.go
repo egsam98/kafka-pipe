@@ -1,17 +1,13 @@
-package connector
+package registry
 
 import (
-	"context"
-
 	"github.com/dgraph-io/badger/v4"
 	"github.com/pkg/errors"
+
+	kafkapipe "github.com/egsam98/kafka-pipe"
 )
 
-type Connector interface {
-	Run(ctx context.Context) error
-}
-
-type Init func(cfg Config) (Connector, error)
+type Init func(cfg Config) (kafkapipe.Connector, error)
 
 type Config struct {
 	Raw     []byte
@@ -24,7 +20,7 @@ func Register(class string, conn Init) {
 	connectors[class] = conn
 }
 
-func Get(class string, cfg Config) (Connector, error) {
+func Get(class string, cfg Config) (kafkapipe.Connector, error) {
 	init, ok := connectors[class]
 	if !ok {
 		return nil, errors.Errorf("unknown connector class: %s", class)

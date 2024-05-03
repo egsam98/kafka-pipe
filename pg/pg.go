@@ -19,7 +19,7 @@ func Is(err error, code ErrorCode) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == string(code)
 }
 
-func RegisterTypes(typeMap *pgtype.Map) {
+func registerTypes(typeMap *pgtype.Map) {
 	typeMap.RegisterType(&pgtype.Type{
 		Codec: UUIDCodec{},
 		Name:  "uuid",
