@@ -37,13 +37,13 @@ func NewConsumerPool(cfg kafkapipe.ConsumerPoolConfig) (ConsumerPool, error) {
 	return pool, nil
 }
 
-func (c ConsumerPool) Listen(ctx context.Context, h Handler) {
+func (c ConsumerPool) Listen(ctx context.Context, handler Handler) {
 	var wg sync.WaitGroup
 	for _, consum := range c {
 		wg.Add(1)
 		go func(consum *consumer) {
 			defer wg.Done()
-			consum.Listen(ctx, h)
+			consum.listen(ctx, handler)
 		}(&consum)
 	}
 	wg.Wait()
@@ -108,7 +108,7 @@ func newConsumer(cfg consumerConfig) (*consumer, error) {
 
 type Handler func(ctx context.Context, fetches kgo.Fetches) error
 
-func (c *consumer) Listen(ctx context.Context, handler Handler) {
+func (c *consumer) listen(ctx context.Context, handler Handler) {
 	for {
 		if err := c.poll(ctx, handler); err != nil {
 			if errors.Is(err, context.Canceled) {

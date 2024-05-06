@@ -99,35 +99,40 @@ func (s *Sink) writeToCH(ctx context.Context, fetches kgo.Fetches) error {
 		return nil
 	}
 
-	if s.cfg.BeforeInsert != nil {
-		if err := s.cfg.BeforeInsert(ctx, records); err != nil {
-			return errors.Wrap(err, "BeforeInsert")
-		}
-	}
-
 	batch, err := s.chConn.PrepareBatch(ctx, fmt.Sprintf(`INSERT INTO %s.%q`, s.cfg.ClickHouse.Database, records[0].Topic))
 	if err != nil {
 		return errors.Wrap(err, "ClickHouse: Prepare batch")
 	}
 	defer batch.Abort() //nolint:errcheck
 
-	structType, err := tableSchema(batch.Columns())
-	if err != nil {
-		return err
+	// Parse record values and append to ClickHouse batch
+	if s.cfg.BeforeInsert != nil {
+		values, err := s.cfg.BeforeInsert(ctx, records)
+		if err != nil {
+			return errors.Wrap(err, "BeforeInsert")
+		}
+		for _, value := range values {
+			if err := batch.AppendStruct(value); err != nil {
+				return errors.Wrap(err, "ClickHouse")
+			}
+		}
+	} else {
+		structType, err := tableSchema(batch.Columns())
+		if err != nil {
+			return err
+		}
+
+		for _, rec := range records {
+			data := reflect.New(structType).Interface()
+			if err := s.cfg.Serde.Deserialize(data, rec.Value); err != nil {
+				return errors.Wrapf(err, "Deserialize message %q using %T", string(rec.Value), s.cfg.Serde)
+			}
+			if err := batch.AppendStruct(data); err != nil {
+				return errors.Wrap(err, "ClickHouse")
+			}
+		}
 	}
 
-	for _, rec := range records {
-		if rec == nil {
-			continue
-		}
-		data := reflect.New(structType).Interface()
-		if err := s.cfg.Serde.Deserialize(data, rec.Value); err != nil {
-			return errors.Wrapf(err, "Deserialize message %q using %T", string(rec.Value), s.cfg.Serde)
-		}
-		if err := batch.AppendStruct(data); err != nil {
-			return errors.Wrap(err, "ClickHouse")
-		}
-	}
 	if err := batch.Send(); err != nil {
 		return errors.Wrap(err, "ClickHouse: Send batch")
 	}
