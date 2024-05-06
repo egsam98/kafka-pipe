@@ -13,8 +13,8 @@ type logger struct {
 	errs    chan error
 }
 
-func newLogger(base *zerolog.Logger) logger {
-	return logger{
+func newLogger(base *zerolog.Logger) *logger {
+	return &logger{
 		Logger: base,
 		errs:   make(chan error),
 	}

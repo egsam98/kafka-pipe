@@ -24,7 +24,7 @@ import (
 
 type Sink struct {
 	cfg        SinkConfig
-	consumers  []*kgox.Consumer
+	consumPool kgox.ConsumerPool
 	chConn     driver.Conn
 	batchState *batchState
 }
@@ -42,24 +42,9 @@ func (s *Sink) Run(ctx context.Context) error {
 		return err
 	}
 
-	// Init consumer group
-	for _, topic := range s.cfg.Kafka.Topics {
-		for range s.cfg.Kafka.WorkersPerTopic {
-			consum, err := kgox.NewConsumer(kgox.ConsumerConfig{
-				Brokers:                s.cfg.Kafka.Brokers,
-				Topics:                 []string{topic},
-				Group:                  s.cfg.Name + "-" + topic,
-				FetchMaxBytes:          s.cfg.Kafka.FetchMaxBytes,
-				FetchMaxPartitionBytes: s.cfg.Kafka.FetchMaxPartitionBytes,
-				BatchSize:              s.cfg.Kafka.Batch.Size,
-				BatchTimeout:           s.cfg.Kafka.Batch.Timeout,
-				RebalanceTimeout:       s.cfg.Kafka.RebalanceTimeout,
-			})
-			if err != nil {
-				return err
-			}
-			s.consumers = append(s.consumers, consum)
-		}
+	// Init consumer pool
+	if s.consumPool, err = kgox.NewConsumerPool(s.cfg.Kafka); err != nil {
+		return err
 	}
 
 	if s.chConn, err = clickhouse.Open(&clickhouse.Options{
@@ -79,20 +64,9 @@ func (s *Sink) Run(ctx context.Context) error {
 	}
 
 	log.Info().Msg("Kafka: Listening to topics...")
-	var wg sync.WaitGroup
-	for _, consum := range s.consumers {
-		wg.Add(1)
-		go func(consum *kgox.Consumer) {
-			defer wg.Done()
-			consum.Listen(ctx, s.writeToCH)
-		}(consum)
-	}
-	wg.Wait()
-
+	s.consumPool.Listen(ctx, s.writeToCH)
 	log.Info().Msg("Kafka: Disconnect")
-	for _, consum := range s.consumers {
-		consum.Close()
-	}
+	s.consumPool.Close()
 	log.Info().Msg("ClickHouse: Disconnect")
 	return s.chConn.Close()
 }

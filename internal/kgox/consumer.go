@@ -2,43 +2,89 @@ package kgox
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
+
+	kafkapipe "github.com/egsam98/kafka-pipe"
 )
 
-type Consumer struct {
+type ConsumerPool []consumer
+
+func NewConsumerPool(cfg kafkapipe.ConsumerPoolConfig) (ConsumerPool, error) {
+	pool := make(ConsumerPool, 0, len(cfg.Topics)*int(cfg.WorkersPerTopic))
+	for _, topic := range cfg.Topics {
+		for range cfg.WorkersPerTopic {
+			consum, err := newConsumer(consumerConfig{
+				Brokers:                cfg.Brokers,
+				Topic:                  topic,
+				Group:                  cfg.GroupPrefix + "-" + topic,
+				FetchMaxBytes:          cfg.FetchMaxBytes,
+				FetchMaxPartitionBytes: cfg.FetchMaxPartitionBytes,
+				RebalanceTimeout:       cfg.RebalanceTimeout,
+				Batch:                  cfg.Batch,
+			})
+			if err != nil {
+				return nil, err
+			}
+			pool = append(pool, *consum)
+		}
+	}
+	return pool, nil
+}
+
+func (c ConsumerPool) Listen(ctx context.Context, h Handler) {
+	var wg sync.WaitGroup
+	for _, consum := range c {
+		wg.Add(1)
+		go func(consum *consumer) {
+			defer wg.Done()
+			consum.Listen(ctx, h)
+		}(&consum)
+	}
+	wg.Wait()
+}
+
+func (c ConsumerPool) Close() {
+	for _, consum := range c {
+		consum.Close()
+	}
+}
+
+type consumer struct {
 	*kgo.Client
-	cfg ConsumerConfig
-	log logger
+	topic    string
+	batchCfg kafkapipe.BatchConfig
+	log      *logger
 }
 
-type ConsumerConfig struct {
-	Brokers, Topics        []string
-	Group                  string
-	BatchSize              uint
-	FetchMaxBytes          uint // default 50MB
-	FetchMaxPartitionBytes uint // default 1MB
-	BatchTimeout           time.Duration
+type consumerConfig struct {
+	Brokers                []string
+	Group, Topic           string
+	FetchMaxBytes          uint          // default 50MB
+	FetchMaxPartitionBytes uint          // default 1MB
 	RebalanceTimeout       time.Duration // default 1m
+	Batch                  kafkapipe.BatchConfig
 }
 
-func NewConsumer(cfg ConsumerConfig) (*Consumer, error) {
-	c := &Consumer{
-		cfg: cfg,
-		log: newLogger(&log.Logger),
+func newConsumer(cfg consumerConfig) (*consumer, error) {
+	c := &consumer{
+		topic:    cfg.Topic,
+		batchCfg: cfg.Batch,
+		log:      newLogger(&log.Logger),
 	}
 
 	opts := []kgo.Opt{
 		kgo.SeedBrokers(cfg.Brokers...),
-		kgo.ConsumeTopics(cfg.Topics...),
+		kgo.ConsumeTopics(cfg.Topic),
 		kgo.ConsumerGroup(cfg.Group),
 		kgo.BlockRebalanceOnPoll(),
 		kgo.DisableAutoCommit(),
-		kgo.WithLogger(&c.log),
+		kgo.WithLogger(c.log),
 	}
 	if cfg.RebalanceTimeout > 0 {
 		opts = append(opts, kgo.RebalanceTimeout(cfg.RebalanceTimeout))
@@ -62,21 +108,21 @@ func NewConsumer(cfg ConsumerConfig) (*Consumer, error) {
 
 type Handler func(ctx context.Context, fetches kgo.Fetches) error
 
-func (c *Consumer) Listen(ctx context.Context, handler Handler) {
+func (c *consumer) Listen(ctx context.Context, handler Handler) {
 	for {
 		if err := c.poll(ctx, handler); err != nil {
 			if errors.Is(err, context.Canceled) {
 				return
 			}
-			log.Error().Stack().Err(err).Msgf("Kafka: Poll topics %v", c.cfg.Topics)
+			log.Error().Stack().Err(err).Msgf("Kafka: Poll topic %q", c.topic)
 		}
 	}
 }
 
-func (c *Consumer) poll(ctx context.Context, handler Handler) error {
+func (c *consumer) poll(ctx context.Context, handler Handler) error {
 	defer c.AllowRebalance()
 
-	timer := time.NewTimer(c.cfg.BatchTimeout)
+	timer := time.NewTimer(c.batchCfg.Timeout)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
@@ -84,7 +130,7 @@ func (c *Consumer) poll(ctx context.Context, handler Handler) error {
 	case <-timer.C:
 	}
 
-	batch := c.PollRecords(nil, int(c.cfg.BatchSize)) //nolint:staticcheck
+	batch := c.PollRecords(nil, int(c.batchCfg.Size)) //nolint:staticcheck
 	if len(batch) == 0 {
 		return nil
 	}

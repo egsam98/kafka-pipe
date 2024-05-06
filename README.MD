@@ -76,7 +76,7 @@ Config parameters
 | kafka:batch:timeout            |          | Producer's batch timeout. Default is `5s`                                                       |
 
 ## ch.Sink
-Transmits events from Kafka topics to ClickHouse. For every consumed topic group ID is created as `{connector_name}-{topic}`.
+Transmits events from Kafka topics to ClickHouse. For every consumed topic group ID is created as `{kafka:group_prefix}-{topic}`.
 
 Config parameters
 
@@ -85,6 +85,11 @@ Config parameters
         <th>Name</th>
         <th>Required</th>
         <th>Description</th>
+    </tr>
+    <tr>
+        <td>kafka:group_prefix</td>
+        <td>+</td>
+        <td>Group ID prefix for group ID `{group_prefix}-{topic}`</td>
     </tr>
     <tr>
         <td>kafka:brokers</td>
