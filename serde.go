@@ -1,4 +1,4 @@
-package serde
+package kafkapipe
 
 import (
 	"github.com/pkg/errors"
@@ -11,7 +11,7 @@ type Serde interface {
 	Deserialize(dst any, src []byte) error
 }
 
-func NewFromYAML(value yaml.Node) (Serde, error) {
+func NewSerdeFromYAML(value yaml.Node) (Serde, error) {
 	var format struct {
 		Value string `yaml:"format"`
 	}

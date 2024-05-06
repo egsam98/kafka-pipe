@@ -28,7 +28,7 @@ import (
 )
 
 const HealthAddr = ":8081"
-const DataFolder = "data"
+const BadgerDir = "data"
 
 func main() {
 	zerolog.ErrorStackMarshaler = pkgerrors.MarshalStack
@@ -80,10 +80,10 @@ func run() error {
 		Logger()
 
 	stor, err := badger.Open(badger.
-		DefaultOptions(DataFolder).
+		DefaultOptions(BadgerDir).
 		WithLogger(new(badgerx.Logger)))
 	if err != nil {
-		return errors.Wrapf(err, "open Badger %q", DataFolder)
+		return errors.Wrapf(err, "open Badger %q", BadgerDir)
 	}
 
 	conn, err := registry.Get(cfg.Class, registry.Config{

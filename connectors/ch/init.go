@@ -6,7 +6,6 @@ import (
 
 	kafkapipe "github.com/egsam98/kafka-pipe"
 	"github.com/egsam98/kafka-pipe/internal/registry"
-	"github.com/egsam98/kafka-pipe/serde"
 )
 
 func init() {
@@ -19,7 +18,7 @@ func init() {
 			return nil, errors.Wrap(err, "parse sink config")
 		}
 		var err error
-		if cfg.SinkConfig.Serde, err = serde.NewFromYAML(cfg.Serde); err != nil {
+		if cfg.SinkConfig.Serde, err = kafkapipe.NewSerdeFromYAML(cfg.Serde); err != nil {
 			return nil, err
 		}
 		cfg.DB = config.Storage

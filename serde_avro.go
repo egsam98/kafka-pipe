@@ -1,4 +1,4 @@
-package serde
+package kafkapipe
 
 import (
 	"io"

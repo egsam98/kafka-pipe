@@ -74,4 +74,4 @@ require (
 	gopkg.in/ini.v1 v1.67.0 // indirect
 )
 
-replace github.com/ClickHouse/clickhouse-go/v2 v2.23.1 => github.com/egsam98/clickhouse-go/v2 v2.23.2-0.20240430110930-0ff4b8e443a5
+replace github.com/ClickHouse/clickhouse-go/v2 => github.com/egsam98/clickhouse-go/v2 v2.23.2-0.20240430110930-0ff4b8e443a5
