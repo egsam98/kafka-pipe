@@ -1,7 +1,6 @@
 package ch
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -64,14 +63,14 @@ func (s *Sink) Run(ctx context.Context) error {
 	}
 
 	log.Info().Msg("Kafka: Listening to topics...")
-	s.consumPool.Listen(ctx, s.writeToCH)
+	s.consumPool.Listen(ctx, s.chWrite)
 	log.Info().Msg("Kafka: Disconnect")
 	s.consumPool.Close()
 	log.Info().Msg("ClickHouse: Disconnect")
 	return s.chConn.Close()
 }
 
-func (s *Sink) writeToCH(ctx context.Context, fetches kgo.Fetches) error {
+func (s *Sink) chWrite(ctx context.Context, fetches kgo.Fetches) error {
 	var records []*kgo.Record
 	s.batchState.Lock()
 	fetches.EachPartition(func(fs kgo.FetchTopicPartition) {
@@ -81,7 +80,11 @@ func (s *Sink) writeToCH(ctx context.Context, fetches kgo.Fetches) error {
 
 		idx := -1
 		if part, ok := s.batchState.offsets[fs.Topic]; ok {
-			diff := int(cmp.Or(part[fs.Partition], -1) - fs.Records[0].Offset)
+			offset, ok := part[fs.Partition]
+			if !ok {
+				offset = -1
+			}
+			diff := int(offset - fs.Records[0].Offset)
 			if diff >= len(fs.Records)-1 {
 				return
 			}
@@ -99,7 +102,8 @@ func (s *Sink) writeToCH(ctx context.Context, fetches kgo.Fetches) error {
 		return nil
 	}
 
-	batch, err := s.chConn.PrepareBatch(ctx, fmt.Sprintf(`INSERT INTO %s.%q`, s.cfg.ClickHouse.Database, records[0].Topic))
+	sql := fmt.Sprintf(`INSERT INTO %s.%q`, s.cfg.ClickHouse.Database, records[0].Topic)
+	batch, err := s.chConn.PrepareBatch(ctx, sql)
 	if err != nil {
 		return errors.Wrap(err, "ClickHouse: Prepare batch")
 	}
@@ -107,32 +111,13 @@ func (s *Sink) writeToCH(ctx context.Context, fetches kgo.Fetches) error {
 
 	// Parse record values and append to ClickHouse batch
 	if s.cfg.BeforeInsert != nil {
-		values, err := s.cfg.BeforeInsert(ctx, records)
-		if err != nil {
-			return errors.Wrap(err, "BeforeInsert")
-		}
-		for _, value := range values {
-			if err := batch.AppendStruct(value); err != nil {
-				return errors.Wrap(err, "ClickHouse")
-			}
-		}
+		err = s.chBatchStatic(ctx, batch, records)
 	} else {
-		structType, err := tableSchema(batch.Columns())
-		if err != nil {
-			return err
-		}
-
-		for _, rec := range records {
-			data := reflect.New(structType).Interface()
-			if err := s.cfg.Serde.Deserialize(data, rec.Value); err != nil {
-				return errors.Wrapf(err, "Deserialize message %q using %T", string(rec.Value), s.cfg.Serde)
-			}
-			if err := batch.AppendStruct(data); err != nil {
-				return errors.Wrap(err, "ClickHouse")
-			}
-		}
+		err = s.chBatchReflect(batch, records)
 	}
-
+	if err != nil {
+		return err
+	}
 	if err := batch.Send(); err != nil {
 		return errors.Wrap(err, "ClickHouse: Send batch")
 	}
@@ -147,6 +132,37 @@ func (s *Sink) writeToCH(ctx context.Context, fetches kgo.Fetches) error {
 	s.batchState.Unlock()
 
 	log.Info().Int("size", len(records)).Msg("ClickHouse: batch is successfully sent")
+	return nil
+}
+
+func (s *Sink) chBatchStatic(ctx context.Context, batch driver.Batch, records []*kgo.Record) error {
+	values, err := s.cfg.BeforeInsert(ctx, s.cfg.Serde, records)
+	if err != nil {
+		return errors.Wrap(err, "BeforeInsert")
+	}
+	for _, value := range values {
+		if err := batch.AppendStruct(value); err != nil {
+			return errors.Wrap(err, "ClickHouse")
+		}
+	}
+	return nil
+}
+
+func (s *Sink) chBatchReflect(batch driver.Batch, records []*kgo.Record) error {
+	structType, err := tableSchema(batch.Columns())
+	if err != nil {
+		return err
+	}
+
+	for _, rec := range records {
+		data := reflect.New(structType).Interface()
+		if err := s.cfg.Serde.Deserialize(data, rec.Value); err != nil {
+			return errors.Wrapf(err, "Deserialize message %q using %T", string(rec.Value), s.cfg.Serde)
+		}
+		if err := batch.AppendStruct(data); err != nil {
+			return errors.Wrap(err, "ClickHouse")
+		}
+	}
 	return nil
 }
 

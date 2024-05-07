@@ -10,13 +10,15 @@ import (
 )
 
 type SinkConfig struct {
-	Name         string                                                        `yaml:"name" validate:"required"`
-	Kafka        kafkapipe.ConsumerPoolConfig                                  `yaml:"kafka"`
-	ClickHouse   ClickHouseConfig                                              `yaml:"click_house"`
-	Serde        kafkapipe.Serde                                               `yaml:"-" validate:"required"`
-	DB           *badger.DB                                                    `yaml:"-" validate:"required"`
-	BeforeInsert func(ctx context.Context, batch []*kgo.Record) ([]any, error) `yaml:"-"`
+	Name         string                       `yaml:"name" validate:"required"`
+	Kafka        kafkapipe.ConsumerPoolConfig `yaml:"kafka"`
+	ClickHouse   ClickHouseConfig             `yaml:"click_house"`
+	Serde        kafkapipe.Serde              `yaml:"-" validate:"required"`
+	DB           *badger.DB                   `yaml:"-" validate:"required"`
+	BeforeInsert BeforeInsert                 `yaml:"-"`
 }
+
+type BeforeInsert func(ctx context.Context, serde kafkapipe.Serde, batch []*kgo.Record) ([]any, error)
 
 type ClickHouseConfig struct {
 	Database string   `yaml:"database" validate:"required"`

@@ -26,7 +26,11 @@ func (l *logger) Level() kgo.LogLevel {
 
 func (l *logger) Log(level kgo.LogLevel, msg string, keyVals ...any) {
 	if idx := slices.Index(keyVals, "err"); idx != -1 {
-		err := keyVals[idx+1].(error)
+		err, ok := keyVals[idx+1].(error)
+		if !ok {
+			goto LOG
+		}
+
 		if l.prevErr == err {
 			return
 		}
@@ -36,6 +40,8 @@ func (l *logger) Log(level kgo.LogLevel, msg string, keyVals ...any) {
 		}
 		l.prevErr = err
 	}
+
+LOG:
 	l.Logger.WithLevel(kgoLvls[level]).Fields(keyVals).Msg("Kafka: " + msg)
 }
 
