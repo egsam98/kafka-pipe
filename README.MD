@@ -173,18 +173,33 @@ Config parameters
             Additional settings for every Serde format are described <a href="#serde">here</a>
         </td>
     </tr>
+    <tr>
+        <td>routes</td>
+        <td></td>
+        <td>Dictionary of routes mapping Kafka topic regular expression to ClickHouse table. Example:
+<pre>
+routes:
+    public.transaction_\d+: transactions
+</pre>
+        </td>
+    </tr>
 </table>
 
 Non-YAML configuration (available if you use connector as go-module):
 
 ```go 
-func BeforeInsert(ctx context.Context, batch []*kgo.Record) error
+func BeforeInsert(ctx context.Context, serde Serde, batch []*kgo.Record) ([]any, error)
 ```
-Hook function that's called per every consumed batch before inserting one into ClickHouse. By reasons of reducing extra 
-memory allocations you want to directly modify the slice of records. If you want to exclude(filter) particular records from batch 
-you can erase them by index, i.e.
-```go 
-batch[i] = nil
+Hook function that's called per every consumed batch before inserting one into ClickHouse. Due to specific ClickHouse 
+implementations (see [here](https://github.com/ClickHouse/clickhouse-go/blob/6985077eacba9197cd3ac07bbd4cc35f6f86e0dd/conn_batch.go#L181)
+and [here](https://github.com/ClickHouse/clickhouse-go/blob/6985077eacba9197cd3ac07bbd4cc35f6f86e0dd/struct_map.go#L35))
+result must consist of struct pointers, i.e.
+```go
+func BeforeInsert(ctx context.Context, serde Serde, batch []*kgo.Record) ([]any, error) {
+	// Handle batch
+	// ...
+	return []any{&Data{Column1: 1}, &Data{Column1: 2}}, nil
+}
 ```
 
 ## s3.Sink
