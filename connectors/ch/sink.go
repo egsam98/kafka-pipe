@@ -18,6 +18,7 @@ import (
 	"golang.org/x/text/language"
 
 	"github.com/egsam98/kafka-pipe/internal/kgox"
+	"github.com/egsam98/kafka-pipe/internal/router"
 	"github.com/egsam98/kafka-pipe/internal/validate"
 )
 
@@ -25,6 +26,7 @@ type Sink struct {
 	cfg        SinkConfig
 	consumPool kgox.ConsumerPool
 	chConn     driver.Conn
+	router     *router.Router
 	batchState *batchState
 }
 
@@ -37,6 +39,9 @@ func (s *Sink) Run(ctx context.Context) error {
 		return err
 	}
 	var err error
+	if s.router, err = router.NewRouter(s.cfg.Routes); err != nil {
+		return err
+	}
 	if s.batchState, err = newBatchState(s.cfg.Name, s.cfg.DB); err != nil {
 		return err
 	}
@@ -102,8 +107,8 @@ func (s *Sink) chWrite(ctx context.Context, fetches kgo.Fetches) error {
 		return nil
 	}
 
-	sql := fmt.Sprintf(`INSERT INTO %s.%q`, s.cfg.ClickHouse.Database, records[0].Topic)
-	batch, err := s.chConn.PrepareBatch(ctx, sql)
+	table := s.router.Route(records[0].Topic)
+	batch, err := s.chConn.PrepareBatch(ctx, fmt.Sprintf(`INSERT INTO %s.%q`, s.cfg.ClickHouse.Database, table))
 	if err != nil {
 		return errors.Wrap(err, "ClickHouse: Prepare batch")
 	}

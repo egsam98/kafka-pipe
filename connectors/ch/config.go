@@ -15,6 +15,7 @@ type SinkConfig struct {
 	ClickHouse   ClickHouseConfig             `yaml:"click_house"`
 	Serde        kafkapipe.Serde              `yaml:"-" validate:"required"`
 	DB           *badger.DB                   `yaml:"-" validate:"required"`
+	Routes       map[string]string            `yaml:"routes"`
 	BeforeInsert BeforeInsert                 `yaml:"-"`
 }
 
