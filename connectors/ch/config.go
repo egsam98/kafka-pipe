@@ -5,6 +5,7 @@ import (
 
 	"github.com/dgraph-io/badger/v4"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"gopkg.in/yaml.v3"
 
 	kafkapipe "github.com/egsam98/kafka-pipe"
 )
@@ -17,6 +18,22 @@ type SinkConfig struct {
 	DB           *badger.DB                   `yaml:"-" validate:"required"`
 	Routes       map[string]string            `yaml:"routes"`
 	BeforeInsert BeforeInsert                 `yaml:"-"`
+}
+
+func (c *SinkConfig) UnmarshalYAML(node *yaml.Node) error {
+	type inline SinkConfig // Avoid stack overflow
+	var cfg struct {
+		inline `yaml:",inline"`
+		Serde  yaml.Node `yaml:"serde"`
+	}
+	if err := node.Decode(&cfg); err != nil {
+		return err
+	}
+
+	*c = SinkConfig(cfg.inline)
+	var err error
+	c.Serde, err = kafkapipe.NewSerdeFromYAML(cfg.Serde)
+	return err
 }
 
 type BeforeInsert func(ctx context.Context, serde kafkapipe.Serde, batch []*kgo.Record) ([]any, error)

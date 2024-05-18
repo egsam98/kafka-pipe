@@ -9,6 +9,7 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/sasl"
 
 	kafkapipe "github.com/egsam98/kafka-pipe"
 )
@@ -27,6 +28,7 @@ func NewConsumerPool(cfg kafkapipe.ConsumerPoolConfig) (ConsumerPool, error) {
 				FetchMaxPartitionBytes: cfg.FetchMaxPartitionBytes,
 				RebalanceTimeout:       cfg.RebalanceTimeout,
 				Batch:                  cfg.Batch,
+				SASL:                   cfg.SASL,
 			})
 			if err != nil {
 				return nil, err
@@ -69,6 +71,7 @@ type consumerConfig struct {
 	FetchMaxPartitionBytes uint          // default 1MB
 	RebalanceTimeout       time.Duration // default 1m
 	Batch                  kafkapipe.BatchConfig
+	SASL                   sasl.Mechanism
 }
 
 func newConsumer(cfg consumerConfig) (*consumer, error) {
@@ -88,6 +91,9 @@ func newConsumer(cfg consumerConfig) (*consumer, error) {
 	}
 	if cfg.RebalanceTimeout > 0 {
 		opts = append(opts, kgo.RebalanceTimeout(cfg.RebalanceTimeout))
+	}
+	if cfg.SASL != nil {
+		opts = append(opts, kgo.SASL(cfg.SASL))
 	}
 	if cfg.FetchMaxBytes > 0 {
 		opts = append(opts, kgo.FetchMaxBytes(int32(cfg.FetchMaxBytes)))

@@ -102,6 +102,11 @@ Config parameters
         <td>Topics to read from</td>
     </tr>
     <tr>
+        <td>kafka:sasl:protocol</td>
+        <td></td>
+        <td>SASL protocol, additional settings <a href="#sasl">here</a></td>
+    </tr>
+    <tr>
         <td>kafka:rebalance_timeout</td>
         <td></td>
         <td>
@@ -208,8 +213,38 @@ No description
 ## s3.Backup
 No description
 
+## SASL
+Specific settings for every SASL protocol. All params are optional.
+### plain
+| Name | Required | Description                               |
+|------|----------|-------------------------------------------|
+| user | +        | Username                                  |
+| pass | +        | Password                                  |
+| zid  |          | Authorization ID to use in authenticating |
+### scram-256
+| Name     | Required | Description                                                                                                            |
+|----------|----------|------------------------------------------------------------------------------------------------------------------------|
+| user     | +        | Username                                                                                                               |
+| pass     | +        | Password                                                                                                               |
+| zid      |          | Authorization ID to use in authenticating                                                                              |
+| nonce    |          | If provided, is the string to use for authentication. Otherwise, this package uses 20 bytes read with crypto/rand (Go) |
+| is_token |          | Suffixes the "tokenauth=true" extra attribute to initial authentication message                                        |
+### scram-512
+See scram-256
+### oath
+| Name  | Required | Description                                                    |
+|-------|----------|----------------------------------------------------------------|
+| token | +        | Oauthbearer token to use for a single session's authentication |
+| zid   |          | Authorization ID                                               |
+### aws
+| Name          | Required | Description                                                                                                                                                                                |
+|---------------|----------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| access_key    | +        | AWS access key                                                                                                                                                                             |
+| secret_key    | +        | AWS secret key                                                                                                                                                                             |
+| session_token |          | Read more https://docs.aws.amazon.com/STS/latest/APIReference/welcome.html                                                                                                                 |
+| user_agent    |          | Override the default "franz-go/<runtime.Version()>/<hostname>". Read more https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html#condition-keys-useragent |
+
 ## Serde
-<p id="serde"></p>
 i.e. Serialization and Deserialization.
 Supported formats: `json`, `avro`.
 Depending on the selected format, different settings are provided:

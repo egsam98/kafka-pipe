@@ -10,18 +10,11 @@ import (
 
 func init() {
 	registry.Register("ch.Sink", func(config registry.Config) (kafkapipe.Connector, error) {
-		var cfg struct {
-			SinkConfig `yaml:",inline"`
-			Serde      yaml.Node `yaml:"serde"`
-		}
+		var cfg SinkConfig
 		if err := yaml.Unmarshal(config.Raw, &cfg); err != nil {
-			return nil, errors.Wrap(err, "parse sink config")
-		}
-		var err error
-		if cfg.SinkConfig.Serde, err = kafkapipe.NewSerdeFromYAML(cfg.Serde); err != nil {
-			return nil, err
+			return nil, errors.Wrap(err, "parse ch.Sink config")
 		}
 		cfg.DB = config.Storage
-		return NewSink(cfg.SinkConfig), nil
+		return NewSink(cfg), nil
 	})
 }
