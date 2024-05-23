@@ -272,9 +272,9 @@ Depending on the selected format, different settings are provided:
 | time_format | String |          | Datetime formatter, possible values: `rfc3339`, `timestamp`, `timestamp-milli`. Default is `timestamp-milli` |
 
 ### avro
-| Name        | Type | Required | Description                                                                                                                                                                     |
-|-------------|------|----------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| schema_urls | Dict | +        | Mapping of Kafka topics to Avro schema's source URLs. Supported HTTP schemas: `file` (local download), `http(-s)` (download via HTTP protocol). Example URL: file://schema.avsc |
+| Name    | Type | Required | Description                                                                                                                                                                     |
+|---------|------|----------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| schemas | Dict | +        | Mapping of Kafka topics to Avro schema's source URLs. Supported HTTP schemas: `file` (local download), `http(-s)` (download via HTTP protocol). Example URL: file://schema.avsc |
 
 Examples of Serde configuration:
 ```yaml
@@ -286,6 +286,6 @@ serde:
 ```yaml
 serde:
   format: avro
-  schema_urls:
+  schemas:
     topic_test: file://schema.avsc
 ```

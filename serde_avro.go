@@ -17,9 +17,9 @@ type Avro struct {
 	schemas map[string]avro.Schema // Map Kafka topic to schema
 }
 
-func NewAvro(schemasUrls map[string]string) (*Avro, error) {
+func NewAvro(schemas map[string]string) (*Avro, error) {
 	a := &Avro{schemas: make(map[string]avro.Schema)}
-	for topic, schemaUrl := range schemasUrls {
+	for topic, schemaUrl := range schemas {
 		var schema avro.Schema
 		switch {
 		case strings.HasPrefix(schemaUrl, "file://"):
@@ -52,12 +52,12 @@ func NewAvro(schemasUrls map[string]string) (*Avro, error) {
 
 func newAvroFromYAML(value yaml.Node) (*Avro, error) {
 	var cfg struct {
-		SchemaUrls map[string]string `yaml:"schema_urls" validate:"required"`
+		Schemas map[string]string `yaml:"schemas" validate:"required"`
 	}
 	if err := validate.StructFromYAML(&cfg, value); err != nil {
 		return nil, err
 	}
-	return NewAvro(cfg.SchemaUrls)
+	return NewAvro(cfg.Schemas)
 }
 
 func (a *Avro) Deserialize(dst any, topic string, src []byte) error {
