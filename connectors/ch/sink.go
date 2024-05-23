@@ -161,7 +161,7 @@ func (s *Sink) chBatchReflect(batch driver.Batch, records []*kgo.Record) error {
 
 	for _, rec := range records {
 		data := reflect.New(structType).Interface()
-		if err := s.cfg.Serde.Deserialize(data, rec.Value); err != nil {
+		if err := s.cfg.Serde.Deserialize(data, rec.Topic, rec.Value); err != nil {
 			return errors.Wrapf(err, "Deserialize message %q using %T", string(rec.Value), s.cfg.Serde)
 		}
 		if err := batch.AppendStruct(data); err != nil {

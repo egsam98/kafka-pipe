@@ -48,7 +48,7 @@ func newJSONFromYAML(value yaml.Node) (*JSON, error) {
 	return NewJSON(cfg.TimeFormat), nil
 }
 
-func (j *JSON) Deserialize(dst any, src []byte) error {
+func (j *JSON) Deserialize(dst any, _ string, src []byte) error {
 	iter := jsoniter.ConfigDefault.BorrowIterator(src)
 	defer jsoniter.ConfigDefault.ReturnIterator(iter)
 	iter.Attachment = j

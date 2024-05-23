@@ -51,7 +51,7 @@ func (s *Snapshot) Run(ctx context.Context) error {
 	// Init Kafka client
 	if s.kafka, err = kgo.NewClient(
 		kgo.SeedBrokers(s.cfg.Kafka.Brokers...),
-		kgo.MaxBufferedRecords(s.cfg.Kafka.Batch.Size),
+		kgo.MaxBufferedRecords(int(s.cfg.Kafka.Batch.Size)),
 		kgo.ProducerLinger(s.cfg.Kafka.Batch.Timeout),
 		kgo.ProducerBatchCompression(kgo.Lz4Compression()),
 	); err != nil {
@@ -65,7 +65,7 @@ func (s *Snapshot) Run(ctx context.Context) error {
 	// Create topics if not exist
 	for _, table := range s.cfg.Pg.Tables {
 		topic := s.topic(table)
-		res, err := kafkaAdmin.CreateTopic(ctx, s.cfg.Kafka.Topic.Partitions, s.cfg.Kafka.Topic.ReplicationFactor, map[string]*string{
+		res, err := kafkaAdmin.CreateTopic(ctx, int32(s.cfg.Kafka.Topic.Partitions), int16(s.cfg.Kafka.Topic.ReplicationFactor), map[string]*string{
 			"compression.type": &s.cfg.Kafka.Topic.CompressionType,
 			"cleanup.policy":   &s.cfg.Kafka.Topic.CleanupPolicy,
 		}, topic)

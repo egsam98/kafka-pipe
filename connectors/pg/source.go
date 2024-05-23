@@ -102,7 +102,7 @@ func (s *Source) Run(ctx context.Context) error {
 	// Create topics if not exists
 	for _, table := range s.cfg.Pg.Tables {
 		topic := s.topicResolver.resolve(table)
-		res, err := kafkaAdmin.CreateTopic(ctx, s.cfg.Kafka.Topic.Partitions, s.cfg.Kafka.Topic.ReplicationFactor, map[string]*string{
+		res, err := kafkaAdmin.CreateTopic(ctx, int32(s.cfg.Kafka.Topic.Partitions), int16(s.cfg.Kafka.Topic.ReplicationFactor), map[string]*string{
 			"compression.type": &s.cfg.Kafka.Topic.CompressionType,
 			"cleanup.policy":   &s.cfg.Kafka.Topic.CleanupPolicy,
 		}, topic)
@@ -457,7 +457,7 @@ func (s *Source) produceMessages(msgs <-chan WALMessage) error {
 				},
 			})
 
-			if len(batch) < s.cfg.Kafka.Batch.Size {
+			if uint(len(batch)) < s.cfg.Kafka.Batch.Size {
 				continue
 			}
 		}

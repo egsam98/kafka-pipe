@@ -38,42 +38,42 @@ Transmits events from PostgreSQL to Kafka topics via logical replication and "pg
 
 Config parameters
 
-| Name                           | Required | Description                                                                                                                                                      |
-|--------------------------------|----------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| pg:skip.delete                 |          | Skip delete-events. Default is `false`                                                                                                                           |
-| pg:url                         | +        | Postgres connection URL                                                                                                                                          |
-| pg:publication                 | +        | Publication name                                                                                                                                                 |
-| pg:slot                        | +        | Replication slot name                                                                                                                                            |
-| pg:tables                      | +        | Tables list to subscribe for replication                                                                                                                         |
-| pg:health.table                |          | Table name. Default is `public.pipe_health`                                                                                                                      |
-| kafka:brokers                  | +        | List of Kafka brokers. Format is {hostname}:{port}                                                                                                               |
-| kafka:topic:prefix             |          | Prefix for created topics. Format is {prefix}.{postgres table name}                                                                                              |
-| kafka:topic:replication.factor |          | Topic replication factor. Default is `1`                                                                                                                         |
-| kafka:topic:partitions         |          | Number of partitions. Default is `1`                                                                                                                             |
-| kafka:topic:compression.type   |          | Compression type. Default is `producer`                                                                                                                          |
-| kafka:topic:cleanup.policy     |          | Cleanup policy. Default is `delete`                                                                                                                              |
-| kafka:topic:routes             |          | Dictionary of mappings between Postgres relation's regular expression and Kafka topic. Example for partitions: ^public.transaction(_\d+)?$: "public.transaction" |
-| kafka:batch:size               |          | Producer's batch size. Default is `10000`                                                                                                                        |
-| kafka:batch:timeout            |          | Producer's batch timeout. Default is `5s`                                                                                                                        |
+| Name                           | Type         | Required | Description                                                                                                                                 |
+|--------------------------------|--------------|----------|---------------------------------------------------------------------------------------------------------------------------------------------|
+| pg:skip.delete                 | Bool         |          | Skip delete-events. Default is `false`                                                                                                      |
+| pg:url                         | String       | +        | Postgres connection URL                                                                                                                     |
+| pg:publication                 | String       | +        | Publication name                                                                                                                            |
+| pg:slot                        | String       | +        | Replication slot name                                                                                                                       |
+| pg:tables                      | List(String) | +        | Tables list to subscribe for replication                                                                                                    |
+| pg:health.table                | String       |          | Table name. Default is `public.pipe_health`                                                                                                 |
+| kafka:brokers                  | List(String) | +        | List of Kafka brokers. Format is {hostname}:{port}                                                                                          |
+| kafka:topic:prefix             | String       |          | Prefix for created topics. Format is {prefix}.{postgres table name}                                                                         |
+| kafka:topic:replication.factor | UInt         |          | Topic replication factor. Default is `1`                                                                                                    |
+| kafka:topic:partitions         | UInt         |          | Number of partitions. Default is `1`                                                                                                        |
+| kafka:topic:compression.type   | String       |          | Compression type. Default is `producer`                                                                                                     |
+| kafka:topic:cleanup.policy     | String       |          | Cleanup policy. Default is `delete`                                                                                                         |
+| kafka:topic:routes             | Dict         |          | Mapping of Postgres relation's regular expression to Kafka topic. Example for partitions: ^public.transaction(_\d+)?$: "public.transaction" |
+| kafka:batch:size               | UInt         |          | Producer's batch size. Default is `10000`                                                                                                   |
+| kafka:batch:timeout            | String       |          | Producer's batch timeout. Default is `5s`                                                                                                   |
 
 ## pg.Snapshot
 Selects all/certain rows from tables and supplies to Kafka topics. Connector stops when all rows are produced
 
 Config parameters
 
-| Name                           | Required | Description                                                                                     |
-|--------------------------------|----------|-------------------------------------------------------------------------------------------------|
-| pg:url                         | +        | Postgres connection URL                                                                         |
-| pg:tables                      | +        | Tables list to execute snapshot                                                                 |
-| pg:condition                   |          | SQL condition part to select rows from table. Example: "WHERE id > 1". Default is empty string. |
-| kafka:brokers                  | +        | List of Kafka brokers. Format is {hostname}:{port}                                              |
-| kafka:topic:prefix             | +        | Prefix for created topics. Format is {prefix}.{postgres table name}                             |
-| kafka:topic:replication.factor |          | Topic replication factor. Default is `1`                                                        |
-| kafka:topic:partitions         |          | Number of partitions. Default is `1`                                                            |
-| kafka:topic:compression.type   |          | Compression type. Default is `producer`                                                         |
-| kafka:topic:cleanup.policy     |          | Cleanup policy. Default is `delete`                                                             |
-| kafka:batch:size               |          | Producer's batch size. Default is `10000`                                                       |
-| kafka:batch:timeout            |          | Producer's batch timeout. Default is `5s`                                                       |
+| Name                           | Type         | Required | Description                                                                                     |
+|--------------------------------|--------------|----------|-------------------------------------------------------------------------------------------------|
+| pg:url                         | String       | +        | Postgres connection URL                                                                         |
+| pg:tables                      | List(String) | +        | Tables list to execute snapshot                                                                 |
+| pg:condition                   | String       |          | SQL condition part to select rows from table. Example: "WHERE id > 1". Default is empty string. |
+| kafka:brokers                  | List(String) | +        | List of Kafka brokers. Format is {hostname}:{port}                                              |
+| kafka:topic:prefix             | String       | +        | Prefix for created topics. Format is {prefix}.{postgres table name}                             |
+| kafka:topic:replication.factor | UInt         |          | Topic replication factor. Default is `1`                                                        |
+| kafka:topic:partitions         | UInt         |          | Number of partitions. Default is `1`                                                            |
+| kafka:topic:compression.type   | String       |          | Compression type. Default is `producer`                                                         |
+| kafka:topic:cleanup.policy     | String       |          | Cleanup policy. Default is `delete`                                                             |
+| kafka:batch:size               | UInt         |          | Producer's batch size. Default is `10000`                                                       |
+| kafka:batch:timeout            | String       |          | Producer's batch timeout. Default is `5s`                                                       |
 
 ## ch.Sink
 Transmits events from Kafka topics to ClickHouse. For every consumed topic group ID is created as `{kafka:group_prefix}-{topic}`.
@@ -83,31 +83,37 @@ Config parameters
 <table>
     <tr>
         <th>Name</th>
+        <th>Type</th>
         <th>Required</th>
         <th>Description</th>
     </tr>
     <tr>
         <td>kafka:group_prefix</td>
+        <td>String</td>
         <td>+</td>
         <td>Group ID prefix for group ID `{group_prefix}-{topic}`</td>
     </tr>
     <tr>
         <td>kafka:brokers</td>
+        <td>List(String)</td>
         <td>+</td>
         <td>List of Kafka brokers. Format is {hostname}:{port}</td>
     </tr>
     <tr>
         <td>kafka:topics</td>
+        <td>List(String)</td>
         <td>+</td>
         <td>Topics to read from</td>
     </tr>
     <tr>
         <td>kafka:sasl:protocol</td>
+        <td>String</td>
         <td></td>
         <td>SASL protocol, additional settings <a href="#sasl">here</a></td>
     </tr>
     <tr>
         <td>kafka:rebalance_timeout</td>
+        <td>String</td>
         <td></td>
         <td>
             How long all members are allowed to complete work and commit offsets, minus the time it took to detect the rebalance (from a heartbeat). 
@@ -116,21 +122,25 @@ Config parameters
     </tr>
     <tr>
         <td>kafka:workers_per_topic</td>
+        <td>UInt</td>
         <td></td>
         <td>Number of workers (consumers) per 1 topic. Default is <code>1</code></td>
     </tr>
     <tr>
         <td>kafka:batch:size</td>
+        <td>UInt</td>
         <td></td>
         <td>Consumer's batch size. Default is <code>10000</code></td>
     </tr>
     <tr>
         <td>kafka:batch:timeout</td>
+        <td>String</td>
         <td></td>
         <td>Consumer's batch timeout. Default is <code>5s</code></td>
     </tr>
     <tr>
         <td>kafka:fetch_max_bytes</td>
+        <td>UInt</td>
         <td></td>
         <td>
             Maximum amount of bytes a broker will try to send during a fetch.
@@ -142,6 +152,7 @@ Config parameters
     </tr>
     <tr>
         <td>kafka:fetch_max_partition_bytes</td>
+        <td>UInt</td>
         <td></td>
         <td>
             Maximum amount of bytes that will be consumed for a single partition in a fetch request. 
@@ -152,26 +163,31 @@ Config parameters
     </tr>
     <tr>
         <td>click_house:addrs</td>
+        <td>List(String)</td>
         <td>+</td>
         <td>ClickHouse addresses list to connect</td>
     </tr>
     <tr>
         <td>click_house:database</td>
+        <td>String</td>
         <td>+</td>
         <td>Database name</td>
     </tr>
     <tr>
         <td>click_house:user</td>
+        <td>String</td>
         <td>+</td>
         <td>Username credential</td>
     </tr>
     <tr>
         <td>click_house:password</td>
+        <td>String</td>
         <td></td>
         <td>Password credential</td>
     </tr>
     <tr>
         <td>serde:format</td>
+        <td>String</td>
         <td></td>
         <td>
             Serde's format for Kafka messages (key & value). Default is <code>json</code>. 
@@ -180,8 +196,9 @@ Config parameters
     </tr>
     <tr>
         <td>routes</td>
+        <td>Dict</td>
         <td></td>
-        <td>Dictionary of routes mapping Kafka topic regular expression to ClickHouse table. Example:
+        <td>Routes of mapping Kafka topic regular expression to ClickHouse table. Example:
 <pre>
 routes:
     public.transaction_\d+: transactions
@@ -216,33 +233,33 @@ No description
 ## SASL
 Specific settings for every SASL protocol. All params are optional.
 ### plain
-| Name | Required | Description                               |
-|------|----------|-------------------------------------------|
-| user | +        | Username                                  |
-| pass | +        | Password                                  |
-| zid  |          | Authorization ID to use in authenticating |
+| Name | Type   | Required | Description                               |
+|------|--------|----------|-------------------------------------------|
+| user | String | +        | Username                                  |
+| pass | String | +        | Password                                  |
+| zid  | String |          | Authorization ID to use in authenticating |
 ### scram-256
-| Name     | Required | Description                                                                                                            |
-|----------|----------|------------------------------------------------------------------------------------------------------------------------|
-| user     | +        | Username                                                                                                               |
-| pass     | +        | Password                                                                                                               |
-| zid      |          | Authorization ID to use in authenticating                                                                              |
-| nonce    |          | If provided, is the string to use for authentication. Otherwise, this package uses 20 bytes read with crypto/rand (Go) |
-| is_token |          | Suffixes the "tokenauth=true" extra attribute to initial authentication message                                        |
+| Name     | Type   | Required | Description                                                                                                            |
+|----------|--------|----------|------------------------------------------------------------------------------------------------------------------------|
+| user     | String | +        | Username                                                                                                               |
+| pass     | String | +        | Password                                                                                                               |
+| zid      | String |          | Authorization ID to use in authenticating                                                                              |
+| nonce    | String |          | If provided, is the string to use for authentication. Otherwise, this package uses 20 bytes read with crypto/rand (Go) |
+| is_token | Bool   |          | Suffixes the "tokenauth=true" extra attribute to initial authentication message                                        |
 ### scram-512
 See scram-256
 ### oath
-| Name  | Required | Description                                                    |
-|-------|----------|----------------------------------------------------------------|
-| token | +        | Oauthbearer token to use for a single session's authentication |
-| zid   |          | Authorization ID                                               |
+| Name  | Type   | Required         | Description                                                    |
+|-------|--------|------------------|----------------------------------------------------------------|
+| token | String | +                | Oauthbearer token to use for a single session's authentication |
+| zid   | String | Authorization ID |
 ### aws
-| Name          | Required | Description                                                                                                                                                                                |
-|---------------|----------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| access_key    | +        | AWS access key                                                                                                                                                                             |
-| secret_key    | +        | AWS secret key                                                                                                                                                                             |
-| session_token |          | Read more https://docs.aws.amazon.com/STS/latest/APIReference/welcome.html                                                                                                                 |
-| user_agent    |          | Override the default "franz-go/<runtime.Version()>/<hostname>". Read more https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html#condition-keys-useragent |
+| Name          | Type   | Required | Description                                                                                                                                                                                |
+|---------------|--------|----------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| access_key    | String | +        | AWS access key                                                                                                                                                                             |
+| secret_key    | String | +        | AWS secret key                                                                                                                                                                             |
+| session_token | String |          | Read more https://docs.aws.amazon.com/STS/latest/APIReference/welcome.html                                                                                                                 |
+| user_agent    | String |          | Override the default "franz-go/<runtime.Version()>/<hostname>". Read more https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html#condition-keys-useragent |
 
 ## Serde
 i.e. Serialization and Deserialization.
@@ -250,18 +267,25 @@ Supported formats: `json`, `avro`.
 Depending on the selected format, different settings are provided:
 
 ### json
-| Name        | Required | Description                                                                                                  |
-|-------------|----------|--------------------------------------------------------------------------------------------------------------|
-| time_format |          | Datetime formatter, possible values: `rfc3339`, `timestamp`, `timestamp-milli`. Default is `timestamp-milli` |
+| Name        | Type   | Required | Description                                                                                                  |
+|-------------|--------|----------|--------------------------------------------------------------------------------------------------------------|
+| time_format | String |          | Datetime formatter, possible values: `rfc3339`, `timestamp`, `timestamp-milli`. Default is `timestamp-milli` |
 
 ### avro
-| Name       | Required | Description                                                                                                                                     |
-|------------|----------|-------------------------------------------------------------------------------------------------------------------------------------------------|
-| schema_uri | +        | Avro schema's source URI. Supported HTTP schemas: `file` (local download), `http(-s)` (download via HTTP protocol). Example: file://schema.avro |
+| Name        | Type | Required | Description                                                                                                                                                                     |
+|-------------|------|----------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| schema_urls | Dict | +        | Mapping of Kafka topics to Avro schema's source URLs. Supported HTTP schemas: `file` (local download), `http(-s)` (download via HTTP protocol). Example URL: file://schema.avsc |
 
-Example of Serde configuration:
+Examples of Serde configuration:
 ```yaml
 serde:
   format: json
   time_format: rfc3339
+```
+
+```yaml
+serde:
+  format: avro
+  schema_urls:
+    topic_test: file://schema.avsc
 ```
