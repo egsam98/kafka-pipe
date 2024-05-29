@@ -93,7 +93,7 @@ func newConsumer(cfg consumerConfig) (*consumer, error) {
 		opts = append(opts, kgo.RebalanceTimeout(cfg.RebalanceTimeout))
 	}
 	if cfg.SASL != nil {
-		opts = append(opts, kgo.SASL(cfg.SASL))
+		opts = append(opts, kgo.DialTLS(), kgo.SASL(cfg.SASL))
 	}
 	if cfg.FetchMaxBytes > 0 {
 		opts = append(opts, kgo.FetchMaxBytes(int32(cfg.FetchMaxBytes)))
