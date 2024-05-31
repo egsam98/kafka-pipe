@@ -6,7 +6,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"regexp"
+	"sync"
+	"time"
+	"unsafe"
 
+	"github.com/bwmarrin/snowflake"
 	jsoniter "github.com/json-iterator/go"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -23,19 +28,23 @@ type Sink struct {
 	cfg        SinkConfig
 	consumPool kgox.ConsumerPool
 	s3         *minio.Client
+	snowflake  *snowflake.Node
 }
 
-func NewSink(cfg SinkConfig) (*Sink, error) {
-	return &Sink{cfg: cfg}, nil
+func NewSink(cfg SinkConfig) *Sink {
+	return &Sink{cfg: cfg}
 }
 
 func (s *Sink) Run(ctx context.Context) error {
 	if err := validate.Struct(&s.cfg); err != nil {
 		return err
 	}
+	var err error
+	if s.snowflake, err = snowflake.NewNode(0); err != nil {
+		return err
+	}
 
 	// Init consumer group
-	var err error
 	if s.consumPool, err = kgox.NewConsumerPool(s.cfg.Kafka); err != nil {
 		return err
 	}
@@ -52,24 +61,32 @@ func (s *Sink) Run(ctx context.Context) error {
 	}
 
 	log.Info().Msg("Kafka: Listening to topics...")
-	s.consumPool.Listen(ctx, s.s3Write)
+
+	var wg sync.WaitGroup
+	for _, topic := range s.cfg.Kafka.Topics {
+		wg.Add(1)
+		go s.listenMerge(ctx, topic, &wg)
+	}
+
+	s.consumPool.Listen(ctx, s.write)
+	wg.Wait()
 	log.Info().Msg("Kafka: Disconnect")
 	s.consumPool.Close()
 	return nil
 }
 
-func (s *Sink) s3Write(ctx context.Context, fetches kgo.Fetches) error {
-	rawFiles := make(map[int64]encoder)
+func (s *Sink) write(_ context.Context, fetches kgo.Fetches) error {
+	rawFiles := make(map[string]encoder)
 	var recordsNum int
 	for iter := fetches.RecordIter(); !iter.Done(); {
 		rec := iter.Next()
 		recordsNum++
 
-		timeUnix := rec.Timestamp.Round(s.cfg.S3.Period).Unix()
-		enc, ok := rawFiles[timeUnix]
+		timeStr := rec.Timestamp.UTC().Truncate(s.cfg.DataPeriod).Format(time.DateTime)
+		enc, ok := rawFiles[timeStr]
 		if !ok {
 			enc = newEncoder()
-			rawFiles[timeUnix] = enc
+			rawFiles[timeStr] = enc
 		}
 
 		enc.WriteVal(newRow(rec))
@@ -86,21 +103,132 @@ func (s *Sink) s3Write(ctx context.Context, fetches kgo.Fetches) error {
 	}
 
 	var g errgroup.Group
-	for timeUnix, file := range rawFiles {
-		filename := fmt.Sprintf("%s/%d.gz", fetches[0].Topics[0].Topic, timeUnix)
+	for timeStr, file := range rawFiles {
+		key := fmt.Sprintf("%s/%s/%d.gz",
+			fetches[0].Topics[0].Topic,
+			timeStr,
+			s.snowflake.Generate(),
+		)
 		reader, n := file.buffered()
 		g.Go(func() error {
-			_, err := s.s3.PutObject(ctx, s.cfg.S3.Bucket, filename, reader, n, minio.PutObjectOptions{
-				ContentType:     "application/json",
+			_, err := s.s3.PutObject(context.Background(), s.cfg.S3.Bucket, key, reader, n, minio.PutObjectOptions{
+				ContentType:     "application/gzip",
 				ContentEncoding: "gzip",
 			})
-			return errors.Wrap(err, "put object")
+			return err
 		})
 	}
 	if err := g.Wait(); err != nil {
 		return err
 	}
+
 	log.Info().Msgf("S3: %d messages have been uploaded", recordsNum)
+	return nil
+}
+
+func (s *Sink) listenMerge(ctx context.Context, topic string, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(s.cfg.MergeTick):
+			for {
+				if err := s.merge(topic); err != nil && !errors.Is(err, context.Canceled) {
+					log.Err(err).Msgf("S3: Merge")
+				}
+				select {
+				case <-time.After(5 * time.Second):
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}
+}
+
+func (s *Sink) merge(topic string) error {
+	type group struct {
+		size int64
+		keys []string
+	}
+
+	//language=goregexp
+	regex, err := regexp.Compile(fmt.Sprintf(`(%s/\d\d\d\d-\d\d-\d\d \d\d:\d\d:\d\d)[/_]\w+\.gz`, topic))
+	if err != nil {
+		return err
+	}
+
+	ctx := context.Background()
+	groups := make(map[string]group)
+	for obj := range s.s3.ListObjects(ctx, s.cfg.S3.Bucket, minio.ListObjectsOptions{
+		Prefix:     topic,
+		Recursive:  true,
+		StartAfter: topic + "/" + time.Now().UTC().Add(-s.cfg.MergeOffset).Format(time.DateTime),
+	}) {
+		if obj.Err != nil {
+			return obj.Err
+		}
+		if obj.Size == 0 {
+			continue
+		}
+		parts := regex.FindStringSubmatch(obj.Key)
+		if len(parts) < 2 {
+			continue
+		}
+		prefix := parts[1]
+		g := groups[prefix]
+		g.keys = append(g.keys, obj.Key)
+		g.size += obj.Size
+		groups[prefix] = g
+	}
+
+	var updPrefixes []string
+	for prefix, group := range groups {
+		if len(group.keys) < 2 {
+			continue
+		}
+
+		readers := make([]io.Reader, len(group.keys))
+		for i, key := range group.keys {
+			obj, err := s.s3.GetObject(ctx, s.cfg.S3.Bucket, key, minio.GetObjectOptions{})
+			if err != nil {
+				return err
+			}
+			readers[i] = obj
+		}
+
+		if _, err := s.s3.PutObject(
+			ctx,
+			s.cfg.S3.Bucket,
+			fmt.Sprintf("%s/%d.gz", prefix, s.snowflake.Generate()),
+			io.MultiReader(readers...),
+			group.size,
+			minio.PutObjectOptions{
+				ContentType:           "application/gzip",
+				ContentEncoding:       "gzip",
+				ConcurrentStreamParts: true,
+				NumThreads:            5,
+			},
+		); err != nil {
+			return err
+		}
+
+		var g errgroup.Group
+		for _, key := range group.keys {
+			g.Go(func() error {
+				return s.s3.RemoveObject(ctx, s.cfg.S3.Bucket, key, minio.RemoveObjectOptions{})
+			})
+		}
+		if err := g.Wait(); err != nil {
+			return err
+		}
+		updPrefixes = append(updPrefixes, prefix)
+	}
+
+	if len(updPrefixes) > 0 {
+		log.Info().Strs("prefixes", updPrefixes).Msg("S3: Keys have been merged")
+	}
 	return nil
 }
 
@@ -131,19 +259,29 @@ func (e *encoder) close() error {
 }
 
 type row struct {
-	Headers []header `json:"headers"`
-	Key     string   `json:"key"`
-	Value   string   `json:"value"`
+	Partition int32    `json:"partition"`
+	Headers   []header `json:"headers"`
+	Key       string   `json:"key"`
+	Value     string   `json:"value"`
 }
 
 func newRow(rec *kgo.Record) row {
 	r := row{
-		Headers: make([]header, len(rec.Headers)),
-		Key:     string(rec.Key),
-		Value:   string(rec.Value),
+		Partition: rec.Partition,
+		Headers:   make([]header, len(rec.Headers)),
+	}
+	if n := len(rec.Key); n > 0 {
+		r.Key = unsafe.String(&rec.Key[0], n)
+	}
+	if n := len(rec.Value); n > 0 {
+		r.Value = unsafe.String(&rec.Value[0], n)
 	}
 	for i, h := range rec.Headers {
-		r.Headers[i] = header{Key: h.Key, Value: string(h.Value)}
+		hr := header{Key: h.Key}
+		if n := len(h.Value); n > 0 {
+			hr.Value = unsafe.String(&h.Value[0], n)
+		}
+		r.Headers[i] = hr
 	}
 	return r
 }
