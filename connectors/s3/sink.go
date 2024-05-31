@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"regexp"
-	"sync"
 	"time"
 	"unsafe"
 
@@ -23,6 +22,9 @@ import (
 	"github.com/egsam98/kafka-pipe/internal/kgox"
 	"github.com/egsam98/kafka-pipe/internal/validate"
 )
+
+const maxMergeKeySize = 10 * 1024 * 1024 // 10MB
+var regexKeySuffix = regexp.MustCompile(`/\d\d\d\d-\d\d-\d\d \d\d:\d\d:\d\d/\d+/(\d+)-(\d+).gz$`)
 
 type Sink struct {
 	cfg        SinkConfig
@@ -61,33 +63,36 @@ func (s *Sink) Run(ctx context.Context) error {
 	}
 
 	log.Info().Msg("Kafka: Listening to topics...")
-
-	var wg sync.WaitGroup
-	for _, topic := range s.cfg.Kafka.Topics {
-		wg.Add(1)
-		go s.listenMerge(ctx, topic, &wg)
-	}
-
-	s.consumPool.Listen(ctx, s.write)
-	wg.Wait()
+	s.consumPool.Listen(ctx, func(_ context.Context, fetches kgo.Fetches) error {
+		return s.listen(fetches)
+	})
 	log.Info().Msg("Kafka: Disconnect")
 	s.consumPool.Close()
 	return nil
 }
 
-func (s *Sink) write(_ context.Context, fetches kgo.Fetches) error {
-	rawFiles := make(map[string]encoder)
+func (s *Sink) listen(fetches kgo.Fetches) error {
+	encoders := make(map[string]*encoder)
 	var recordsNum int
 	for iter := fetches.RecordIter(); !iter.Done(); {
 		rec := iter.Next()
 		recordsNum++
 
-		timeStr := rec.Timestamp.UTC().Truncate(s.cfg.DataPeriod).Format(time.DateTime)
-		enc, ok := rawFiles[timeStr]
+		prefix := fmt.Sprintf("%s/%s/%d",
+			rec.Topic,
+			rec.Timestamp.UTC().Truncate(s.cfg.DataPeriod).Format(time.DateTime),
+			rec.Partition,
+		)
+		enc, ok := encoders[prefix]
 		if !ok {
 			enc = newEncoder()
-			rawFiles[timeStr] = enc
+			encoders[prefix] = enc
 		}
+
+		if enc.minOffset < 0 {
+			enc.minOffset = rec.Offset
+		}
+		enc.maxOffset = rec.Offset
 
 		enc.WriteVal(newRow(rec))
 		enc.WriteRaw("\n")
@@ -96,27 +101,15 @@ func (s *Sink) write(_ context.Context, fetches kgo.Fetches) error {
 		}
 	}
 
-	for _, file := range rawFiles {
-		if err := file.close(); err != nil {
+	for _, enc := range encoders {
+		if err := enc.close(); err != nil {
 			return err
 		}
 	}
 
 	var g errgroup.Group
-	for timeStr, file := range rawFiles {
-		key := fmt.Sprintf("%s/%s/%d.gz",
-			fetches[0].Topics[0].Topic,
-			timeStr,
-			s.snowflake.Generate(),
-		)
-		reader, n := file.buffered()
-		g.Go(func() error {
-			_, err := s.s3.PutObject(context.Background(), s.cfg.S3.Bucket, key, reader, n, minio.PutObjectOptions{
-				ContentType:     "application/gzip",
-				ContentEncoding: "gzip",
-			})
-			return err
-		})
+	for prefix, enc := range encoders {
+		g.Go(func() error { return s.s3Write(prefix, enc) })
 	}
 	if err := g.Wait(); err != nil {
 		return err
@@ -126,126 +119,75 @@ func (s *Sink) write(_ context.Context, fetches kgo.Fetches) error {
 	return nil
 }
 
-func (s *Sink) listenMerge(ctx context.Context, topic string, wg *sync.WaitGroup) {
-	defer wg.Done()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(s.cfg.MergeTick):
-			for {
-				if err := s.merge(topic); err != nil && !errors.Is(err, context.Canceled) {
-					log.Err(err).Msgf("S3: Merge")
-				}
-				select {
-				case <-time.After(5 * time.Second):
-				case <-ctx.Done():
-					return
-				}
-			}
-		}
-	}
-}
-
-func (s *Sink) merge(topic string) error {
-	type group struct {
-		size int64
-		keys []string
-	}
-
-	//language=goregexp
-	regex, err := regexp.Compile(fmt.Sprintf(`(%s/\d\d\d\d-\d\d-\d\d \d\d:\d\d:\d\d)[/_]\w+\.gz`, topic))
-	if err != nil {
-		return err
-	}
-
-	ctx := context.Background()
-	groups := make(map[string]group)
-	for obj := range s.s3.ListObjects(ctx, s.cfg.S3.Bucket, minio.ListObjectsOptions{
-		Prefix:     topic,
-		Recursive:  true,
-		StartAfter: topic + "/" + time.Now().UTC().Add(-s.cfg.MergeOffset).Format(time.DateTime),
-	}) {
+func (s *Sink) s3Write(prefix string, enc *encoder) error {
+	ctx, cancel := context.WithCancel(context.Background()) // To prevent memory leak after breaking channel
+	defer cancel()
+	var latestObj minio.ObjectInfo
+	for obj := range s.s3.ListObjects(ctx, s.cfg.S3.Bucket, minio.ListObjectsOptions{Prefix: prefix + "/"}) {
 		if obj.Err != nil {
 			return obj.Err
 		}
-		if obj.Size == 0 {
-			continue
-		}
-		parts := regex.FindStringSubmatch(obj.Key)
-		if len(parts) < 2 {
-			continue
-		}
-		prefix := parts[1]
-		g := groups[prefix]
-		g.keys = append(g.keys, obj.Key)
-		g.size += obj.Size
-		groups[prefix] = g
+		latestObj = obj
 	}
 
-	var updPrefixes []string
-	for prefix, group := range groups {
-		if len(group.keys) < 2 {
-			continue
-		}
+	fmt.Println("LAST KEY", latestObj.Key)
+	key := fmt.Sprintf("%s/%018d-%018d.gz", prefix, enc.minOffset, enc.maxOffset)
+	reader, n := enc.buffered()
+	var removeLatest bool
 
-		readers := make([]io.Reader, len(group.keys))
-		for i, key := range group.keys {
-			obj, err := s.s3.GetObject(ctx, s.cfg.S3.Bucket, key, minio.GetObjectOptions{})
+	if latestObj.Key != "" {
+		if latestObj.Key == key {
+			return nil
+		}
+		if latestObj.Size <= maxMergeKeySize {
+			removeLatest = true
+
+			obj, err := s.s3.GetObject(ctx, s.cfg.S3.Bucket, latestObj.Key, minio.GetObjectOptions{})
 			if err != nil {
 				return err
 			}
-			readers[i] = obj
-		}
+			parts := regexKeySuffix.FindStringSubmatch(latestObj.Key)
+			if len(parts) < 2 {
+				return errors.Errorf("invalid key: %q", latestObj.Key)
+			}
 
-		if _, err := s.s3.PutObject(
-			ctx,
-			s.cfg.S3.Bucket,
-			fmt.Sprintf("%s/%d.gz", prefix, s.snowflake.Generate()),
-			io.MultiReader(readers...),
-			group.size,
-			minio.PutObjectOptions{
-				ContentType:           "application/gzip",
-				ContentEncoding:       "gzip",
-				ConcurrentStreamParts: true,
-				NumThreads:            5,
-			},
-		); err != nil {
-			return err
+			key = fmt.Sprintf("%s/%s-%018d.gz", prefix, parts[1], enc.maxOffset)
+			reader = io.MultiReader(obj, reader)
+			n += latestObj.Size
 		}
-
-		var g errgroup.Group
-		for _, key := range group.keys {
-			g.Go(func() error {
-				return s.s3.RemoveObject(ctx, s.cfg.S3.Bucket, key, minio.RemoveObjectOptions{})
-			})
-		}
-		if err := g.Wait(); err != nil {
-			return err
-		}
-		updPrefixes = append(updPrefixes, prefix)
 	}
 
-	if len(updPrefixes) > 0 {
-		log.Info().Strs("prefixes", updPrefixes).Msg("S3: Keys have been merged")
+	if _, err := s.s3.PutObject(ctx, s.cfg.S3.Bucket, key, reader, n, minio.PutObjectOptions{
+		ContentType:     "application/gzip",
+		ContentEncoding: "gzip",
+	}); err != nil {
+		return err
+	}
+
+	if removeLatest {
+		if err := s.s3.RemoveObject(ctx, s.cfg.S3.Bucket, latestObj.Key, minio.RemoveObjectOptions{}); err != nil {
+			log.Err(err).Msgf("S3: Remove %q", latestObj.Key)
+		}
 	}
 	return nil
 }
 
 type encoder struct {
 	*jsoniter.Stream
-	buf *bytes.Buffer
-	gzw *gzip.Writer
+	buf                  *bytes.Buffer
+	gzw                  *gzip.Writer
+	minOffset, maxOffset int64
 }
 
-func newEncoder() encoder {
+func newEncoder() *encoder {
 	var buf bytes.Buffer
 	gzw, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
 	stream := jsoniter.ConfigDefault.BorrowStream(gzw)
-	return encoder{
-		Stream: stream,
-		buf:    &buf,
-		gzw:    gzw,
+	return &encoder{
+		Stream:    stream,
+		buf:       &buf,
+		gzw:       gzw,
+		minOffset: -1,
 	}
 }
 
@@ -259,16 +201,16 @@ func (e *encoder) close() error {
 }
 
 type row struct {
-	Partition int32    `json:"partition"`
-	Headers   []header `json:"headers"`
-	Key       string   `json:"key"`
-	Value     string   `json:"value"`
+	Offset  int64    `json:"offset"`
+	Key     string   `json:"key"`
+	Value   string   `json:"value"`
+	Headers []header `json:"headers"`
 }
 
 func newRow(rec *kgo.Record) row {
 	r := row{
-		Partition: rec.Partition,
-		Headers:   make([]header, len(rec.Headers)),
+		Offset:  rec.Offset,
+		Headers: make([]header, len(rec.Headers)),
 	}
 	if n := len(rec.Key); n > 0 {
 		r.Key = unsafe.String(&rec.Key[0], n)
@@ -291,131 +233,109 @@ type header struct {
 	Value string `json:"value"`
 }
 
-//func (s *Sink) poll(ctx context.Context) (map[string]chan *kgo.Record, error) {
-//	records := make(map[string]chan *kgo.Record)
-//	for _, topic := range s.cfg.Kafka.Topics {
-//		records[topic] = make(chan *kgo.Record)
-//	}
-//
-//	log.Info().Msgf("Kafka: Listening to %v", s.cfg.Kafka.Topics)
-//
-//	go func() {
-//		defer func() {
-//			for _, records := range records {
-//				close(records)
-//			}
-//		}()
-//
-//		for {
-//			pollCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-//			fes := s.kafka.PollFetches(pollCtx)
-//			cancel()
-//			if err := fes.Err(); err != nil {
-//				if errors.Is(err, context.Canceled) {
-//					return
-//				}
-//				if !errors.Is(err, context.DeadlineExceeded) {
-//					log.Err(err).Msgf("Kafka: Poll fetches")
-//				}
-//			}
-//
-//			fes.EachRecord(func(rec *kgo.Record) {
-//				records[rec.Topic] <- rec
-//			})
-//		}
-//	}()
-//
-//	return records, nil
-//}
-//
-//func (s *Sink) listenRecords(ctx context.Context, records <-chan *kgo.Record) {
-//	defer s.wg.Done()
-//
-//	parts := make(map[string][]*kgo.Record)
-//	offsets := make(map[int32]int64)
-//	var overflowKey string
-//
-//	ticker := time.NewTicker(s.cfg.S3.Flush.Timeout)
-//	defer ticker.Stop()
-//
+//func (s *Sink) listenMerge(ctx context.Context, topic string, wg *sync.WaitGroup) {
+//	return
+//	defer wg.Done()
 //	for {
 //		select {
-//		case <-ticker.C:
-//		case rec, ok := <-records:
-//			if !ok {
-//				return
-//			}
-//			if offset, ok := offsets[rec.Partition]; ok && rec.Offset <= offset {
-//				continue
-//			}
-//
-//			key := rec.Timestamp.UTC().Round(s.cfg.S3.Flush.Timeout).Format(TimeFmt)
-//			parts[key] = append(parts[key], rec)
-//			offsets[rec.Partition] = rec.Offset
-//			if len(parts[key]) < s.cfg.S3.Flush.Size {
-//				continue
-//			}
-//			overflowKey = key
-//		}
-//
-//		for key, part := range parts {
-//			if overflowKey != "" && key != overflowKey {
-//				continue
-//			}
-//
-//			filename := fmt.Sprintf("%s/%s.json.gz", part[0].Topic, key)
-//
+//		case <-ctx.Done():
+//			return
+//		case <-time.After(s.cfg.MergeTick):
 //			for {
-//				err := s.uploadToS3(filename, part)
-//				if err == nil {
-//					break
+//				if err := s.merge(topic); err != nil && !errors.Is(err, context.Canceled) {
+//					log.Err(err).Msgf("S3: Merge")
 //				}
-//
-//				log.Error().Stack().Err(err).Msgf("S3: Upload to %q", filename)
 //				select {
 //				case <-time.After(5 * time.Second):
 //				case <-ctx.Done():
 //					return
 //				}
 //			}
-//
-//			s.kafka.MarkCommitRecords(part...)
-//			delete(parts, key)
-//			log.Info().Int("count", len(part)).Msgf("S3: Messages have been uploaded to %q", filename)
-//
-//			if overflowKey != "" {
-//				break
-//			}
 //		}
-//
-//		overflowKey = ""
 //	}
 //}
 //
-//func (s *Sink) uploadToS3(filename string, records []*kgo.Record) error {
-//	var buf bytes.Buffer
-//	gzw := gzip.NewWriter(&buf)
-//	_, _ = gzw.Write([]byte{'['})
-//	for i, record := range records {
-//		b, err := json.Marshal(newRecord(record))
-//		if err != nil {
-//			return errors.Wrap(err, "marshal Kafka record's data")
-//		}
-//
-//		_, _ = gzw.Write(b)
-//		var tail byte = ','
-//		if i == len(records)-1 {
-//			tail = ']'
-//		}
-//		_, _ = gzw.Write([]byte{tail})
-//	}
-//	if err := gzw.Close(); err != nil {
-//		return errors.Wrap(err, "gzip encode")
+//func (s *Sink) merge(topic string) error {
+//	type group struct {
+//		size int64
+//		keys []string
 //	}
 //
-//	_, err := s.s3.PutObject(context.Background(), s.cfg.S3.Bucket, filename, &buf, int64(buf.Len()), minio.PutObjectOptions{
-//		ContentType:     "application/json",
-//		ContentEncoding: "gzip",
-//	})
-//	return errors.Wrap(err, "put object")
+//	//language=goregexp
+//	regex, err := regexp.Compile(fmt.Sprintf(`(%s/\d\d\d\d-\d\d-\d\d \d\d:\d\d:\d\d)[/_]\w+\.gz`, topic))
+//	if err != nil {
+//		return err
+//	}
+//
+//	ctx := context.Background()
+//	groups := make(map[string]group)
+//	for obj := range s.s3.ListObjects(ctx, s.cfg.S3.Bucket, minio.ListObjectsOptions{
+//		Prefix:     topic,
+//		Recursive:  true,
+//		StartAfter: topic + "/" + time.Now().UTC().Add(-s.cfg.MergeOffset).Format(time.DateTime),
+//	}) {
+//		if obj.Err != nil {
+//			return obj.Err
+//		}
+//		if obj.Size == 0 {
+//			continue
+//		}
+//		parts := regex.FindStringSubmatch(obj.Key)
+//		if len(parts) < 2 {
+//			continue
+//		}
+//		prefix := parts[1]
+//		g := groups[prefix]
+//		g.keys = append(g.keys, obj.Key)
+//		g.size += obj.Size
+//		groups[prefix] = g
+//	}
+//
+//	var updPrefixes []string
+//	for prefix, group := range groups {
+//		if len(group.keys) < 2 {
+//			continue
+//		}
+//
+//		readers := make([]io.Reader, len(group.keys))
+//		for i, key := range group.keys {
+//			obj, err := s.s3.GetObject(ctx, s.cfg.S3.Bucket, key, minio.GetObjectOptions{})
+//			if err != nil {
+//				return err
+//			}
+//			readers[i] = obj
+//		}
+//
+//		if _, err := s.s3.PutObject(
+//			ctx,
+//			s.cfg.S3.Bucket,
+//			fmt.Sprintf("%s/%d.gz", prefix, s.snowflake.Generate()),
+//			io.MultiReader(readers...),
+//			group.size,
+//			minio.PutObjectOptions{
+//				ContentType:           "application/gzip",
+//				ContentEncoding:       "gzip",
+//				ConcurrentStreamParts: true,
+//				NumThreads:            5,
+//			},
+//		); err != nil {
+//			return err
+//		}
+//
+//		var g errgroup.Group
+//		for _, key := range group.keys {
+//			g.Go(func() error {
+//				return s.s3.RemoveObject(ctx, s.cfg.S3.Bucket, key, minio.RemoveObjectOptions{})
+//			})
+//		}
+//		if err := g.Wait(); err != nil {
+//			return err
+//		}
+//		updPrefixes = append(updPrefixes, prefix)
+//	}
+//
+//	if len(updPrefixes) > 0 {
+//		log.Info().Strs("prefixes", updPrefixes).Msg("S3: Keys have been merged")
+//	}
+//	return nil
 //}
