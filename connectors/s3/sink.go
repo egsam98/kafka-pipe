@@ -10,7 +10,6 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/bwmarrin/snowflake"
 	jsoniter "github.com/json-iterator/go"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -23,14 +22,13 @@ import (
 	"github.com/egsam98/kafka-pipe/internal/validate"
 )
 
-const maxMergeKeySize = 10 * 1024 * 1024 // 10MB
+const maxMergeKeySize = 5 * 1024 * 1024 // 5MB
 var regexKeySuffix = regexp.MustCompile(`/\d\d\d\d-\d\d-\d\d \d\d:\d\d:\d\d/\d+/(\d+)-(\d+).gz$`)
 
 type Sink struct {
 	cfg        SinkConfig
 	consumPool kgox.ConsumerPool
 	s3         *minio.Client
-	snowflake  *snowflake.Node
 }
 
 func NewSink(cfg SinkConfig) *Sink {
@@ -41,12 +39,9 @@ func (s *Sink) Run(ctx context.Context) error {
 	if err := validate.Struct(&s.cfg); err != nil {
 		return err
 	}
-	var err error
-	if s.snowflake, err = snowflake.NewNode(0); err != nil {
-		return err
-	}
 
 	// Init consumer group
+	var err error
 	if s.consumPool, err = kgox.NewConsumerPool(s.cfg.Kafka); err != nil {
 		return err
 	}
@@ -56,7 +51,7 @@ func (s *Sink) Run(ctx context.Context) error {
 		Creds:  credentials.NewStaticV4(s.cfg.S3.AccessKeyID, s.cfg.S3.SecretKeyAccess, ""),
 		Secure: s.cfg.S3.SSL,
 	}); err != nil {
-		return errors.Wrap(err, "init MinIO client")
+		return errors.Wrap(err, "init S3 client")
 	}
 	if _, err := s.s3.ListBuckets(ctx); err != nil {
 		return errors.Wrap(err, "ping S3")
@@ -71,12 +66,11 @@ func (s *Sink) Run(ctx context.Context) error {
 	return nil
 }
 
+// listen handles Kafka messages from common topic
 func (s *Sink) listen(fetches kgo.Fetches) error {
-	encoders := make(map[string]*encoder)
-	var recordsNum int
+	encoders := make(map[string]*encoder) // Each encoder is unique for topic+truncated time+partition
 	for iter := fetches.RecordIter(); !iter.Done(); {
 		rec := iter.Next()
-		recordsNum++
 
 		prefix := fmt.Sprintf("%s/%s/%d",
 			rec.Topic,
@@ -97,58 +91,60 @@ func (s *Sink) listen(fetches kgo.Fetches) error {
 		enc.WriteVal(newRow(rec))
 		enc.WriteRaw("\n")
 		if err := enc.Flush(); err != nil {
-			return err
+			return errors.Wrapf(err, "encode Kafka record: %+v", *rec)
 		}
 	}
 
+	// Close encoders
 	for _, enc := range encoders {
 		if err := enc.close(); err != nil {
 			return err
 		}
 	}
 
+	// Upload data to S3 for every encoder
 	var g errgroup.Group
 	for prefix, enc := range encoders {
 		g.Go(func() error { return s.s3Write(prefix, enc) })
 	}
-	if err := g.Wait(); err != nil {
-		return err
-	}
-
-	log.Info().Msgf("S3: %d messages have been uploaded", recordsNum)
-	return nil
+	return g.Wait()
 }
 
+// s3Write uploads buffered data in encoder to S3 storage with `{prefix}/{minOffset}-{maxOffset}.gz` key.
+// The prefix is `{topic}{truncated time}{partition}`.
+// The data might be merged with the latest object if its size doesn't exceed maxMergeKeySize
 func (s *Sink) s3Write(prefix string, enc *encoder) error {
-	ctx, cancel := context.WithCancel(context.Background()) // To prevent memory leak after breaking channel
+	// Find the latest object
+	ctx, cancel := context.WithCancel(context.Background()) // To prevent memory leak after breaking channel consumption
 	defer cancel()
 	var latestObj minio.ObjectInfo
 	for obj := range s.s3.ListObjects(ctx, s.cfg.S3.Bucket, minio.ListObjectsOptions{Prefix: prefix + "/"}) {
 		if obj.Err != nil {
-			return obj.Err
+			return errors.Wrapf(obj.Err, `S3: list objects by prefix "%s/"`, prefix)
 		}
 		latestObj = obj
 	}
 
-	fmt.Println("LAST KEY", latestObj.Key)
 	key := fmt.Sprintf("%s/%018d-%018d.gz", prefix, enc.minOffset, enc.maxOffset)
 	reader, n := enc.buffered()
-	var removeLatest bool
+	var merge bool
 
 	if latestObj.Key != "" {
 		if latestObj.Key == key {
+			log.Warn().Msgf("S3: Key %q exists, skipping upload", key)
 			return nil
 		}
+		// Merge new object with the latest one
 		if latestObj.Size <= maxMergeKeySize {
-			removeLatest = true
+			merge = true
 
 			obj, err := s.s3.GetObject(ctx, s.cfg.S3.Bucket, latestObj.Key, minio.GetObjectOptions{})
 			if err != nil {
-				return err
+				return errors.Wrapf(err, "S3: get %q", latestObj.Key)
 			}
 			parts := regexKeySuffix.FindStringSubmatch(latestObj.Key)
 			if len(parts) < 2 {
-				return errors.Errorf("invalid key: %q", latestObj.Key)
+				return errors.Errorf("S3: invalid key: %q", latestObj.Key)
 			}
 
 			key = fmt.Sprintf("%s/%s-%018d.gz", prefix, parts[1], enc.maxOffset)
@@ -157,21 +153,34 @@ func (s *Sink) s3Write(prefix string, enc *encoder) error {
 		}
 	}
 
+	start := time.Now()
 	if _, err := s.s3.PutObject(ctx, s.cfg.S3.Bucket, key, reader, n, minio.PutObjectOptions{
 		ContentType:     "application/gzip",
 		ContentEncoding: "gzip",
 	}); err != nil {
-		return err
+		return errors.Wrapf(err, "S3: Put %q", key)
 	}
+	uploadDur := time.Since(start)
 
-	if removeLatest {
+	if merge {
 		if err := s.s3.RemoveObject(ctx, s.cfg.S3.Bucket, latestObj.Key, minio.RemoveObjectOptions{}); err != nil {
 			log.Err(err).Msgf("S3: Remove %q", latestObj.Key)
 		}
 	}
+
+	event := log.Info().
+		Int64("messages", enc.maxOffset-enc.minOffset+1).
+		Str("key", key).
+		Int64("size_b", n).
+		Dur("duration_ms", uploadDur)
+	if merge {
+		event = event.Str("merged_with", latestObj.Key)
+	}
+	event.Msgf("S3: Uploaded")
 	return nil
 }
 
+// encoder writes gzip-compressed JSON data. It also holds accumulated buffer and min/max offsets
 type encoder struct {
 	*jsoniter.Stream
 	buf                  *bytes.Buffer
@@ -197,9 +206,10 @@ func (e *encoder) buffered() (io.Reader, int64) {
 
 func (e *encoder) close() error {
 	jsoniter.ConfigDefault.ReturnStream(e.Stream)
-	return e.gzw.Close()
+	return errors.WithStack(e.gzw.Close())
 }
 
+// row represents a line of encoded data in S3
 type row struct {
 	Offset  int64    `json:"offset"`
 	Key     string   `json:"key"`
@@ -232,110 +242,3 @@ type header struct {
 	Key   string `json:"key"`
 	Value string `json:"value"`
 }
-
-//func (s *Sink) listenMerge(ctx context.Context, topic string, wg *sync.WaitGroup) {
-//	return
-//	defer wg.Done()
-//	for {
-//		select {
-//		case <-ctx.Done():
-//			return
-//		case <-time.After(s.cfg.MergeTick):
-//			for {
-//				if err := s.merge(topic); err != nil && !errors.Is(err, context.Canceled) {
-//					log.Err(err).Msgf("S3: Merge")
-//				}
-//				select {
-//				case <-time.After(5 * time.Second):
-//				case <-ctx.Done():
-//					return
-//				}
-//			}
-//		}
-//	}
-//}
-//
-//func (s *Sink) merge(topic string) error {
-//	type group struct {
-//		size int64
-//		keys []string
-//	}
-//
-//	//language=goregexp
-//	regex, err := regexp.Compile(fmt.Sprintf(`(%s/\d\d\d\d-\d\d-\d\d \d\d:\d\d:\d\d)[/_]\w+\.gz`, topic))
-//	if err != nil {
-//		return err
-//	}
-//
-//	ctx := context.Background()
-//	groups := make(map[string]group)
-//	for obj := range s.s3.ListObjects(ctx, s.cfg.S3.Bucket, minio.ListObjectsOptions{
-//		Prefix:     topic,
-//		Recursive:  true,
-//		StartAfter: topic + "/" + time.Now().UTC().Add(-s.cfg.MergeOffset).Format(time.DateTime),
-//	}) {
-//		if obj.Err != nil {
-//			return obj.Err
-//		}
-//		if obj.Size == 0 {
-//			continue
-//		}
-//		parts := regex.FindStringSubmatch(obj.Key)
-//		if len(parts) < 2 {
-//			continue
-//		}
-//		prefix := parts[1]
-//		g := groups[prefix]
-//		g.keys = append(g.keys, obj.Key)
-//		g.size += obj.Size
-//		groups[prefix] = g
-//	}
-//
-//	var updPrefixes []string
-//	for prefix, group := range groups {
-//		if len(group.keys) < 2 {
-//			continue
-//		}
-//
-//		readers := make([]io.Reader, len(group.keys))
-//		for i, key := range group.keys {
-//			obj, err := s.s3.GetObject(ctx, s.cfg.S3.Bucket, key, minio.GetObjectOptions{})
-//			if err != nil {
-//				return err
-//			}
-//			readers[i] = obj
-//		}
-//
-//		if _, err := s.s3.PutObject(
-//			ctx,
-//			s.cfg.S3.Bucket,
-//			fmt.Sprintf("%s/%d.gz", prefix, s.snowflake.Generate()),
-//			io.MultiReader(readers...),
-//			group.size,
-//			minio.PutObjectOptions{
-//				ContentType:           "application/gzip",
-//				ContentEncoding:       "gzip",
-//				ConcurrentStreamParts: true,
-//				NumThreads:            5,
-//			},
-//		); err != nil {
-//			return err
-//		}
-//
-//		var g errgroup.Group
-//		for _, key := range group.keys {
-//			g.Go(func() error {
-//				return s.s3.RemoveObject(ctx, s.cfg.S3.Bucket, key, minio.RemoveObjectOptions{})
-//			})
-//		}
-//		if err := g.Wait(); err != nil {
-//			return err
-//		}
-//		updPrefixes = append(updPrefixes, prefix)
-//	}
-//
-//	if len(updPrefixes) > 0 {
-//		log.Info().Strs("prefixes", updPrefixes).Msg("S3: Keys have been merged")
-//	}
-//	return nil
-//}
