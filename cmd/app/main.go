@@ -79,16 +79,18 @@ func run() error {
 		Timestamp().
 		Logger()
 
-	stor, err := badger.Open(badger.
+	db, err := badger.Open(badger.
 		DefaultOptions(BadgerDir).
+		WithSyncWrites(true).
 		WithLogger(new(badgerx.Logger)))
 	if err != nil {
 		return errors.Wrapf(err, "open Badger %q", BadgerDir)
 	}
+	go badgerGc(db)
 
 	conn, err := registry.Get(cfg.Class, registry.Config{
 		Raw:     raw,
-		Storage: stor,
+		Storage: db,
 	})
 	if err != nil {
 		return err
@@ -108,7 +110,15 @@ func run() error {
 		return err
 	}
 	log.Info().Msg("Connector stopped")
-	return stor.Close()
+	return db.Close()
+}
+
+func badgerGc(db *badger.DB) {
+	for range time.Tick(10 * time.Minute) {
+		if err := db.RunValueLogGC(0.5); err != nil && !errors.Is(err, badger.ErrNoRewrite) {
+			log.Error().Stack().Err(err).Msg("Badger: Value GC")
+		}
+	}
 }
 
 func httpHealth() {

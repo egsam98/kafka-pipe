@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"strconv"
 	"time"
 	"unsafe"
 
@@ -19,6 +20,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/egsam98/kafka-pipe/internal/kgox"
+	"github.com/egsam98/kafka-pipe/internal/syncx"
 	"github.com/egsam98/kafka-pipe/internal/validate"
 )
 
@@ -27,8 +29,8 @@ var regexKeySuffix = regexp.MustCompile(`/\d\d\d\d-\d\d-\d\d \d\d:\d\d:\d\d/\d+/
 
 type Sink struct {
 	cfg        SinkConfig
-	consumPool kgox.ConsumerPool
 	s3         *minio.Client
+	deleteKeys *syncx.Queue[string]
 }
 
 func NewSink(cfg SinkConfig) *Sink {
@@ -40,9 +42,9 @@ func (s *Sink) Run(ctx context.Context) error {
 		return err
 	}
 
-	// Init consumer group
-	var err error
-	if s.consumPool, err = kgox.NewConsumerPool(s.cfg.Kafka); err != nil {
+	// Init consumer pool
+	consumPool, err := kgox.NewConsumerPool(s.cfg.Kafka)
+	if err != nil {
 		return err
 	}
 
@@ -57,13 +59,21 @@ func (s *Sink) Run(ctx context.Context) error {
 		return errors.Wrap(err, "ping S3")
 	}
 
+	if s.deleteKeys, err = syncx.NewQueue[string](s.cfg.Name, s.cfg.DB); err != nil {
+		return err
+	}
+
+	go s.deleteKeys.Listen(ctx, func(key string) error {
+		return s.s3.RemoveObject(ctx, s.cfg.S3.Bucket, key, minio.RemoveObjectOptions{})
+	})
+
 	log.Info().Msg("Kafka: Listening to topics...")
-	s.consumPool.Listen(ctx, func(_ context.Context, fetches kgo.Fetches) error {
+	consumPool.Listen(ctx, func(_ context.Context, fetches kgo.Fetches) error {
 		return s.listen(fetches)
 	})
 	log.Info().Msg("Kafka: Disconnect")
-	s.consumPool.Close()
-	return nil
+	consumPool.Close()
+	return s.deleteKeys.Close()
 }
 
 // listen handles Kafka messages from common topic
@@ -130,10 +140,17 @@ func (s *Sink) s3Write(prefix string, enc *encoder) error {
 	var merge bool
 
 	if latestObj.Key != "" {
-		if latestObj.Key == key {
-			log.Warn().Msgf("S3: Key %q exists, skipping upload", key)
+		parts := regexKeySuffix.FindStringSubmatch(latestObj.Key)
+		if len(parts) < 3 {
+			return errors.Errorf("S3: invalid key: %q", latestObj.Key)
+		}
+		latestMinOffset := parts[1]
+		if latestMaxOffset, _ := strconv.ParseInt(parts[2], 10, 64); latestMaxOffset >= enc.maxOffset {
+			log.Warn().Msgf("S3: %d (latest max offset) >= %d (current max offset), skipping key %q",
+				latestMaxOffset, enc.maxOffset, key)
 			return nil
 		}
+
 		// Merge new object with the latest one
 		if latestObj.Size <= maxMergeKeySize {
 			merge = true
@@ -142,12 +159,8 @@ func (s *Sink) s3Write(prefix string, enc *encoder) error {
 			if err != nil {
 				return errors.Wrapf(err, "S3: get %q", latestObj.Key)
 			}
-			parts := regexKeySuffix.FindStringSubmatch(latestObj.Key)
-			if len(parts) < 2 {
-				return errors.Errorf("S3: invalid key: %q", latestObj.Key)
-			}
 
-			key = fmt.Sprintf("%s/%s-%018d.gz", prefix, parts[1], enc.maxOffset)
+			key = fmt.Sprintf("%s/%s-%018d.gz", prefix, latestMinOffset, enc.maxOffset)
 			reader = io.MultiReader(obj, reader)
 			n += latestObj.Size
 		}
@@ -164,7 +177,9 @@ func (s *Sink) s3Write(prefix string, enc *encoder) error {
 
 	if merge {
 		if err := s.s3.RemoveObject(ctx, s.cfg.S3.Bucket, latestObj.Key, minio.RemoveObjectOptions{}); err != nil {
-			log.Err(err).Msgf("S3: Remove %q", latestObj.Key)
+			if err := s.deleteKeys.Push(latestObj.Key); err != nil {
+				return err
+			}
 		}
 	}
 

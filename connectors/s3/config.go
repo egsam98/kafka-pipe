@@ -3,6 +3,7 @@ package s3
 import (
 	"time"
 
+	"github.com/dgraph-io/badger/v4"
 	"github.com/pkg/errors"
 	"gopkg.in/yaml.v3"
 
@@ -10,11 +11,11 @@ import (
 )
 
 type SinkConfig struct {
-	Kafka       kafkapipe.ConsumerPoolConfig `yaml:"kafka"`
-	S3          ConnConfig                   `yaml:"s3"`
-	DataPeriod  time.Duration                `yaml:"data_period" validate:"default=1h"`
-	MergeOffset time.Duration                `yaml:"merge_offset" validate:"default=168h"` // 7 days by default
-	MergeTick   time.Duration                `yaml:"merge_tick" validate:"default=1m"`
+	Name       string                       `yaml:"name" validate:"required"`
+	Kafka      kafkapipe.ConsumerPoolConfig `yaml:"kafka"`
+	S3         ConnConfig                   `yaml:"s3"`
+	DataPeriod time.Duration                `yaml:"data_period" validate:"default=1h"`
+	DB         *badger.DB                   `yaml:"-" validate:"required"`
 }
 
 type ConnConfig struct {
