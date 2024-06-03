@@ -19,8 +19,8 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/egsam98/kafka-pipe/internal/badgerx"
 	"github.com/egsam98/kafka-pipe/internal/kgox"
-	"github.com/egsam98/kafka-pipe/internal/syncx"
 	"github.com/egsam98/kafka-pipe/internal/validate"
 )
 
@@ -30,7 +30,7 @@ var regexKeySuffix = regexp.MustCompile(`/\d\d\d\d-\d\d-\d\d \d\d:\d\d:\d\d/\d+/
 type Sink struct {
 	cfg        SinkConfig
 	s3         *minio.Client
-	deleteKeys *syncx.Queue[string]
+	deleteKeys *badgerx.Queue[string]
 }
 
 func NewSink(cfg SinkConfig) *Sink {
@@ -59,10 +59,9 @@ func (s *Sink) Run(ctx context.Context) error {
 		return errors.Wrap(err, "ping S3")
 	}
 
-	if s.deleteKeys, err = syncx.NewQueue[string](s.cfg.Name, s.cfg.DB); err != nil {
+	if s.deleteKeys, err = badgerx.NewQueue[string](s.cfg.Name, s.cfg.DB); err != nil {
 		return err
 	}
-
 	go s.deleteKeys.Listen(ctx, func(key string) error {
 		return s.s3.RemoveObject(ctx, s.cfg.S3.Bucket, key, minio.RemoveObjectOptions{})
 	})
