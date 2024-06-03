@@ -11,19 +11,19 @@ import (
 )
 
 type SinkConfig struct {
-	Name       string                       `yaml:"name" validate:"required"`
-	Kafka      kafkapipe.ConsumerPoolConfig `yaml:"kafka"`
-	S3         ConnConfig                   `yaml:"s3"`
-	DataPeriod time.Duration                `yaml:"data_period" validate:"default=1h"`
-	DB         *badger.DB                   `yaml:"-" validate:"required"`
+	Name              string                       `yaml:"name" validate:"required"`
+	Kafka             kafkapipe.ConsumerPoolConfig `yaml:"kafka"`
+	S3                ConnConfig                   `yaml:"s3"`
+	GroupTimeInterval time.Duration                `yaml:"group_time_interval" validate:"default=1h"`
+	DB                *badger.DB                   `yaml:"-" validate:"required"`
 }
 
 type ConnConfig struct {
-	SSL             bool   `yaml:"ssl"`
-	URL             string `yaml:"url" validate:"url"`
-	Bucket          string `yaml:"bucket" validate:"required"`
-	AccessKeyID     string `yaml:"access_key_id" validate:"required"`
-	SecretKeyAccess string `yaml:"secret_key_access" validate:"required"`
+	SSL    bool   `yaml:"ssl"`
+	URL    string `yaml:"url" validate:"url"`
+	Bucket string `yaml:"bucket" validate:"required"`
+	ID     string `yaml:"id" validate:"required"`
+	Secret string `yaml:"secret" validate:"required"`
 }
 
 type BackupConfig struct {

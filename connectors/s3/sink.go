@@ -50,7 +50,7 @@ func (s *Sink) Run(ctx context.Context) error {
 
 	// Init MinIO client - S3 compatible storage
 	if s.s3, err = minio.New(s.cfg.S3.URL, &minio.Options{
-		Creds:  credentials.NewStaticV4(s.cfg.S3.AccessKeyID, s.cfg.S3.SecretKeyAccess, ""),
+		Creds:  credentials.NewStaticV4(s.cfg.S3.ID, s.cfg.S3.Secret, ""),
 		Secure: s.cfg.S3.SSL,
 	}); err != nil {
 		return errors.Wrap(err, "init S3 client")
@@ -77,13 +77,13 @@ func (s *Sink) Run(ctx context.Context) error {
 
 // listen handles Kafka messages from common topic
 func (s *Sink) listen(fetches kgo.Fetches) error {
-	encoders := make(map[string]*encoder) // Each encoder is unique for topic+truncated time+partition
+	encoders := make(map[string]*encoder) // Each encoder is unique for topic+truncated datetime+partition
 	for iter := fetches.RecordIter(); !iter.Done(); {
 		rec := iter.Next()
 
 		prefix := fmt.Sprintf("%s/%s/%d",
 			rec.Topic,
-			rec.Timestamp.UTC().Truncate(s.cfg.DataPeriod).Format(time.DateTime),
+			rec.Timestamp.UTC().Truncate(s.cfg.GroupTimeInterval).Format(time.DateTime),
 			rec.Partition,
 		)
 		enc, ok := encoders[prefix]
@@ -121,47 +121,47 @@ func (s *Sink) listen(fetches kgo.Fetches) error {
 
 // s3Write uploads buffered data in encoder to S3 storage with `{prefix}/{minOffset}-{maxOffset}.gz` key.
 // The prefix is `{topic}{truncated time}{partition}`.
-// The data might be merged with the latest object if its size doesn't exceed maxMergeKeySize
+// The data might be merged with previous object if its size doesn't exceed maxMergeKeySize
 func (s *Sink) s3Write(prefix string, enc *encoder) error {
-	// Find the latest object
+	// Find previous object
 	ctx, cancel := context.WithCancel(context.Background()) // To prevent memory leak after breaking channel consumption
 	defer cancel()
-	var latestObj minio.ObjectInfo
+	var prevObj minio.ObjectInfo
 	for obj := range s.s3.ListObjects(ctx, s.cfg.S3.Bucket, minio.ListObjectsOptions{Prefix: prefix + "/"}) {
 		if obj.Err != nil {
 			return errors.Wrapf(obj.Err, `S3: list objects by prefix "%s/"`, prefix)
 		}
-		latestObj = obj
+		prevObj = obj
 	}
 
 	key := fmt.Sprintf("%s/%018d-%018d.gz", prefix, enc.minOffset, enc.maxOffset)
 	reader, n := enc.buffered()
 	var merge bool
 
-	if latestObj.Key != "" {
-		parts := regexKeySuffix.FindStringSubmatch(latestObj.Key)
+	if prevObj.Key != "" {
+		parts := regexKeySuffix.FindStringSubmatch(prevObj.Key)
 		if len(parts) < 3 {
-			return errors.Errorf("S3: invalid key: %q", latestObj.Key)
+			return errors.Errorf("S3: invalid key: %q", prevObj.Key)
 		}
-		latestMinOffset := parts[1]
-		if latestMaxOffset, _ := strconv.ParseInt(parts[2], 10, 64); latestMaxOffset >= enc.maxOffset {
-			log.Warn().Msgf("S3: %d (latest max offset) >= %d (current max offset), skipping key %q",
-				latestMaxOffset, enc.maxOffset, key)
+		prevMinOffset := parts[1]
+		if prevMaxOffset, _ := strconv.ParseInt(parts[2], 10, 64); prevMaxOffset >= enc.maxOffset {
+			log.Warn().Msgf("S3: %d (prev max offset) >= %d (current max offset), skipping key %q",
+				prevMaxOffset, enc.maxOffset, key)
 			return nil
 		}
 
-		// Merge new object with the latest one
-		if latestObj.Size <= maxMergeKeySize {
+		// Merge new object with the previous one
+		if prevObj.Size <= maxMergeKeySize {
 			merge = true
 
-			obj, err := s.s3.GetObject(ctx, s.cfg.S3.Bucket, latestObj.Key, minio.GetObjectOptions{})
+			obj, err := s.s3.GetObject(ctx, s.cfg.S3.Bucket, prevObj.Key, minio.GetObjectOptions{})
 			if err != nil {
-				return errors.Wrapf(err, "S3: get %q", latestObj.Key)
+				return errors.Wrapf(err, "S3: get %q", prevObj.Key)
 			}
 
-			key = fmt.Sprintf("%s/%s-%018d.gz", prefix, latestMinOffset, enc.maxOffset)
+			key = fmt.Sprintf("%s/%s-%018d.gz", prefix, prevMinOffset, enc.maxOffset)
 			reader = io.MultiReader(obj, reader)
-			n += latestObj.Size
+			n += prevObj.Size
 		}
 	}
 
@@ -175,8 +175,8 @@ func (s *Sink) s3Write(prefix string, enc *encoder) error {
 	uploadDur := time.Since(start)
 
 	if merge {
-		if err := s.s3.RemoveObject(ctx, s.cfg.S3.Bucket, latestObj.Key, minio.RemoveObjectOptions{}); err != nil {
-			if err := s.deleteKeys.Push(latestObj.Key); err != nil {
+		if err := s.s3.RemoveObject(ctx, s.cfg.S3.Bucket, prevObj.Key, minio.RemoveObjectOptions{}); err != nil {
+			if err := s.deleteKeys.Push(prevObj.Key); err != nil {
 				return err
 			}
 		}
@@ -188,7 +188,7 @@ func (s *Sink) s3Write(prefix string, enc *encoder) error {
 		Int64("size_b", n).
 		Dur("duration_ms", uploadDur)
 	if merge {
-		event = event.Str("merged_with", latestObj.Key)
+		event = event.Str("merged_with", prevObj.Key)
 	}
 	event.Msgf("S3: Uploaded")
 	return nil
