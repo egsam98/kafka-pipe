@@ -4,203 +4,255 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"encoding/json"
 	"fmt"
-	"sync"
+	"io"
+	"regexp"
+	"strconv"
 	"time"
+	"unsafe"
 
+	jsoniter "github.com/json-iterator/go"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"golang.org/x/sync/errgroup"
 
-	"github.com/egsam98/kafka-pipe/internal/registry"
+	"github.com/egsam98/kafka-pipe/internal/badgerx"
+	"github.com/egsam98/kafka-pipe/internal/kgox"
+	"github.com/egsam98/kafka-pipe/internal/validate"
 )
 
+const maxMergeKeySize = 5 * 1024 * 1024 // 5MB
+var regexKeySuffix = regexp.MustCompile(`/\d\d\d\d-\d\d-\d\d \d\d:\d\d:\d\d/\d+/(\d+)-(\d+).gz$`)
+
 type Sink struct {
-	wg    sync.WaitGroup
-	cfg   SinkConfig
-	kafka *kgo.Client
-	s3    *minio.Client
+	cfg        SinkConfig
+	s3         *minio.Client
+	deleteKeys *badgerx.Queue[string]
 }
 
-func NewSink(config registry.Config) (*Sink, error) {
-	var cfg SinkConfig
-	if err := cfg.Parse(config.Raw); err != nil {
-		return nil, err
-	}
-	return &Sink{cfg: cfg}, nil
+func NewSink(cfg SinkConfig) *Sink {
+	return &Sink{cfg: cfg}
 }
 
 func (s *Sink) Run(ctx context.Context) error {
-	// Init consumer group
-	var err error
-	if s.kafka, err = kgo.NewClient(
-		kgo.SeedBrokers(s.cfg.Kafka.Brokers...),
-		kgo.ConsumeTopics(s.cfg.Kafka.Topics...),
-		kgo.ConsumerGroup(s.cfg.Name),
-		kgo.AutoCommitMarks(),
-	); err != nil {
-		return errors.Wrap(err, "init Kafka consumer group")
+	if err := validate.Struct(&s.cfg); err != nil {
+		return err
 	}
-	if err := s.kafka.Ping(ctx); err != nil {
-		return errors.Wrap(err, "ping Kafka brokers")
+
+	// Init consumer pool
+	consumPool, err := kgox.NewConsumerPool(s.cfg.Kafka)
+	if err != nil {
+		return err
 	}
 
 	// Init MinIO client - S3 compatible storage
 	if s.s3, err = minio.New(s.cfg.S3.URL, &minio.Options{
-		Creds:  credentials.NewStaticV4(s.cfg.S3.AccessKeyID, s.cfg.S3.SecretKeyAccess, ""),
+		Creds:  credentials.NewStaticV4(s.cfg.S3.ID, s.cfg.S3.Secret, ""),
 		Secure: s.cfg.S3.SSL,
 	}); err != nil {
-		return errors.Wrap(err, "init MinIO client")
+		return errors.Wrap(err, "init S3 client")
 	}
 	if _, err := s.s3.ListBuckets(ctx); err != nil {
 		return errors.Wrap(err, "ping S3")
 	}
 
-	records, err := s.poll(ctx)
-	if err != nil {
+	if s.deleteKeys, err = badgerx.NewQueue[string](s.cfg.Name, s.cfg.DB); err != nil {
 		return err
 	}
+	go s.deleteKeys.Listen(ctx, func(key string) error {
+		return s.s3.RemoveObject(ctx, s.cfg.S3.Bucket, key, minio.RemoveObjectOptions{})
+	})
 
-	s.wg.Add(len(records))
-	for _, recordCh := range records {
-		go s.listenRecords(ctx, recordCh)
+	log.Info().Msg("Kafka: Listening to topics...")
+	consumPool.Listen(ctx, func(_ context.Context, fetches kgo.Fetches) error {
+		return s.listen(fetches)
+	})
+	log.Info().Msg("Kafka: Disconnect")
+	consumPool.Close()
+	return s.deleteKeys.Close()
+}
+
+// listen handles Kafka messages from common topic
+func (s *Sink) listen(fetches kgo.Fetches) error {
+	encoders := make(map[string]*encoder) // Each encoder is unique for topic+truncated datetime+partition
+	for iter := fetches.RecordIter(); !iter.Done(); {
+		rec := iter.Next()
+
+		prefix := fmt.Sprintf("%s/%s/%d",
+			rec.Topic,
+			rec.Timestamp.UTC().Truncate(s.cfg.GroupTimeInterval).Format(time.DateTime),
+			rec.Partition,
+		)
+		enc, ok := encoders[prefix]
+		if !ok {
+			enc = newEncoder()
+			encoders[prefix] = enc
+		}
+
+		if enc.minOffset < 0 {
+			enc.minOffset = rec.Offset
+		}
+		enc.maxOffset = rec.Offset
+
+		enc.WriteVal(newRow(rec))
+		enc.WriteRaw("\n")
+		if err := enc.Flush(); err != nil {
+			return errors.Wrapf(err, "encode Kafka record: %+v", *rec)
+		}
 	}
 
-	<-ctx.Done()
-	s.wg.Wait()
-	log.Info().Msg("Kafka: Close consumer group")
-	s.kafka.Close()
+	// Close encoders
+	for _, enc := range encoders {
+		if err := enc.close(); err != nil {
+			return err
+		}
+	}
+
+	// Upload data to S3 for every encoder
+	var g errgroup.Group
+	for prefix, enc := range encoders {
+		g.Go(func() error { return s.s3Write(prefix, enc) })
+	}
+	return g.Wait()
+}
+
+// s3Write uploads buffered data in encoder to S3 storage with `{prefix}/{minOffset}-{maxOffset}.gz` key.
+// The prefix is `{topic}{truncated time}{partition}`.
+// The data might be merged with previous object if its size doesn't exceed maxMergeKeySize
+func (s *Sink) s3Write(prefix string, enc *encoder) error {
+	// Find previous object
+	ctx, cancel := context.WithCancel(context.Background()) // To prevent memory leak after breaking channel consumption
+	defer cancel()
+	var prevObj minio.ObjectInfo
+	for obj := range s.s3.ListObjects(ctx, s.cfg.S3.Bucket, minio.ListObjectsOptions{Prefix: prefix + "/"}) {
+		if obj.Err != nil {
+			return errors.Wrapf(obj.Err, `S3: list objects by prefix "%s/"`, prefix)
+		}
+		prevObj = obj
+	}
+
+	key := fmt.Sprintf("%s/%018d-%018d.gz", prefix, enc.minOffset, enc.maxOffset)
+	reader, n := enc.buffered()
+	var merge bool
+
+	if prevObj.Key != "" {
+		parts := regexKeySuffix.FindStringSubmatch(prevObj.Key)
+		if len(parts) < 3 {
+			return errors.Errorf("S3: invalid key: %q", prevObj.Key)
+		}
+		prevMinOffset := parts[1]
+		if prevMaxOffset, _ := strconv.ParseInt(parts[2], 10, 64); prevMaxOffset >= enc.maxOffset {
+			log.Warn().Msgf("S3: %d (prev max offset) >= %d (current max offset), skipping key %q",
+				prevMaxOffset, enc.maxOffset, key)
+			return nil
+		}
+
+		// Merge new object with the previous one
+		if prevObj.Size <= maxMergeKeySize {
+			merge = true
+
+			obj, err := s.s3.GetObject(ctx, s.cfg.S3.Bucket, prevObj.Key, minio.GetObjectOptions{})
+			if err != nil {
+				return errors.Wrapf(err, "S3: get %q", prevObj.Key)
+			}
+
+			key = fmt.Sprintf("%s/%s-%018d.gz", prefix, prevMinOffset, enc.maxOffset)
+			reader = io.MultiReader(obj, reader)
+			n += prevObj.Size
+		}
+	}
+
+	start := time.Now()
+	if _, err := s.s3.PutObject(ctx, s.cfg.S3.Bucket, key, reader, n, minio.PutObjectOptions{
+		ContentType:     "application/gzip",
+		ContentEncoding: "gzip",
+	}); err != nil {
+		return errors.Wrapf(err, "S3: Put %q", key)
+	}
+	uploadDur := time.Since(start)
+
+	if merge {
+		if err := s.s3.RemoveObject(ctx, s.cfg.S3.Bucket, prevObj.Key, minio.RemoveObjectOptions{}); err != nil {
+			if err := s.deleteKeys.Push(prevObj.Key); err != nil {
+				return err
+			}
+		}
+	}
+
+	event := log.Info().
+		Int64("messages", enc.maxOffset-enc.minOffset+1).
+		Str("key", key).
+		Int64("size_b", n).
+		Dur("duration_ms", uploadDur)
+	if merge {
+		event = event.Str("merged_with", prevObj.Key)
+	}
+	event.Msgf("S3: Uploaded")
 	return nil
 }
 
-func (s *Sink) poll(ctx context.Context) (map[string]chan *kgo.Record, error) {
-	records := make(map[string]chan *kgo.Record)
-	for _, topic := range s.cfg.Kafka.Topics {
-		records[topic] = make(chan *kgo.Record)
-	}
-
-	log.Info().Msgf("Kafka: Listening to %v", s.cfg.Kafka.Topics)
-
-	go func() {
-		defer func() {
-			for _, records := range records {
-				close(records)
-			}
-		}()
-
-		for {
-			pollCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-			fes := s.kafka.PollFetches(pollCtx)
-			cancel()
-			if err := fes.Err(); err != nil {
-				if errors.Is(err, context.Canceled) {
-					return
-				}
-				if !errors.Is(err, context.DeadlineExceeded) {
-					log.Err(err).Msgf("Kafka: Poll fetches")
-				}
-			}
-
-			fes.EachRecord(func(rec *kgo.Record) {
-				records[rec.Topic] <- rec
-			})
-		}
-	}()
-
-	return records, nil
+// encoder writes gzip-compressed JSON data. It also holds accumulated buffer and min/max offsets
+type encoder struct {
+	*jsoniter.Stream
+	buf                  *bytes.Buffer
+	gzw                  *gzip.Writer
+	minOffset, maxOffset int64
 }
 
-func (s *Sink) listenRecords(ctx context.Context, records <-chan *kgo.Record) {
-	defer s.wg.Done()
-
-	parts := make(map[string][]*kgo.Record)
-	offsets := make(map[int32]int64)
-	var overflowKey string
-
-	ticker := time.NewTicker(s.cfg.S3.Flush.Timeout)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-		case rec, ok := <-records:
-			if !ok {
-				return
-			}
-			if offset, ok := offsets[rec.Partition]; ok && rec.Offset <= offset {
-				continue
-			}
-
-			key := rec.Timestamp.UTC().Round(s.cfg.S3.Flush.Timeout).Format(TimeFmt)
-			parts[key] = append(parts[key], rec)
-			offsets[rec.Partition] = rec.Offset
-			if len(parts[key]) < s.cfg.S3.Flush.Size {
-				continue
-			}
-			overflowKey = key
-		}
-
-		for key, part := range parts {
-			if overflowKey != "" && key != overflowKey {
-				continue
-			}
-
-			filename := fmt.Sprintf("%s/%s.json.gz", part[0].Topic, key)
-
-			for {
-				err := s.uploadToS3(filename, part)
-				if err == nil {
-					break
-				}
-
-				log.Error().Stack().Err(err).Msgf("S3: Upload to %q", filename)
-				select {
-				case <-time.After(5 * time.Second):
-				case <-ctx.Done():
-					return
-				}
-			}
-
-			s.kafka.MarkCommitRecords(part...)
-			delete(parts, key)
-			log.Info().Int("count", len(part)).Msgf("S3: Messages have been uploaded to %q", filename)
-
-			if overflowKey != "" {
-				break
-			}
-		}
-
-		overflowKey = ""
-	}
-}
-
-func (s *Sink) uploadToS3(filename string, records []*kgo.Record) error {
+func newEncoder() *encoder {
 	var buf bytes.Buffer
-	gzw := gzip.NewWriter(&buf)
-	_, _ = gzw.Write([]byte{'['})
-	for i, record := range records {
-		b, err := json.Marshal(newRecord(record))
-		if err != nil {
-			return errors.Wrap(err, "marshal Kafka record's data")
-		}
-
-		_, _ = gzw.Write(b)
-		var tail byte = ','
-		if i == len(records)-1 {
-			tail = ']'
-		}
-		_, _ = gzw.Write([]byte{tail})
+	gzw, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	stream := jsoniter.ConfigDefault.BorrowStream(gzw)
+	return &encoder{
+		Stream:    stream,
+		buf:       &buf,
+		gzw:       gzw,
+		minOffset: -1,
 	}
-	if err := gzw.Close(); err != nil {
-		return errors.Wrap(err, "gzip encode")
-	}
+}
 
-	_, err := s.s3.PutObject(context.Background(), s.cfg.S3.Bucket, filename, &buf, int64(buf.Len()), minio.PutObjectOptions{
-		ContentType:     "application/json",
-		ContentEncoding: "gzip",
-	})
-	return errors.Wrap(err, "put object")
+func (e *encoder) buffered() (io.Reader, int64) {
+	return e.buf, int64(e.buf.Len())
+}
+
+func (e *encoder) close() error {
+	jsoniter.ConfigDefault.ReturnStream(e.Stream)
+	return errors.WithStack(e.gzw.Close())
+}
+
+// row represents a line of encoded data in S3
+type row struct {
+	Offset  int64    `json:"offset"`
+	Key     string   `json:"key"`
+	Value   string   `json:"value"`
+	Headers []header `json:"headers"`
+}
+
+func newRow(rec *kgo.Record) row {
+	r := row{
+		Offset:  rec.Offset,
+		Headers: make([]header, len(rec.Headers)),
+	}
+	if n := len(rec.Key); n > 0 {
+		r.Key = unsafe.String(&rec.Key[0], n)
+	}
+	if n := len(rec.Value); n > 0 {
+		r.Value = unsafe.String(&rec.Value[0], n)
+	}
+	for i, h := range rec.Headers {
+		hr := header{Key: h.Key}
+		if n := len(h.Value); n > 0 {
+			hr.Value = unsafe.String(&h.Value[0], n)
+		}
+		r.Headers[i] = hr
+	}
+	return r
+}
+
+type header struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
 }

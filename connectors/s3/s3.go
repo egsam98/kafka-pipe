@@ -11,11 +11,3 @@ type record struct {
 	Value   []byte
 	Headers []kgo.RecordHeader
 }
-
-func newRecord(rec *kgo.Record) record {
-	return record{
-		Key:     rec.Key,
-		Value:   rec.Value,
-		Headers: rec.Headers,
-	}
-}
