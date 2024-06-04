@@ -225,7 +225,132 @@ func BeforeInsert(ctx context.Context, serde Serde, batch []*kgo.Record) ([]any,
 ```
 
 ## s3.Sink
-No description
+Transmits events from Kafka topics to S3-compatible storage. For every consumed topic a group ID is created as `{kafka:group_prefix}-{topic}`.
+This connector polls Kafka records according batch settings (see `kafka:batch:*`), groups by truncated datetime + partition and
+then uploads collected data chunks into S3. The storage keys are built by following schema:
+<code>{topic}/{truncated datetime}/{partition}/{min_offset in chunk}-{max_offset in chunk}.gz</code>.
+If previous data chunk doesn't exceed 5MB limit it's merged with new chunk and deleted. If prev. chunk's max offset >=
+new chunk's max offset, new chunk is ignored.
+
+Config parameters
+<table>
+    <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Required</th>
+        <th>Description</th>
+    </tr>
+    <tr>
+        <td>kafka:group_prefix</td>
+        <td>String</td>
+        <td>+</td>
+        <td>Group ID prefix for group ID `{group_prefix}-{topic}`</td>
+    </tr>
+    <tr>
+        <td>kafka:brokers</td>
+        <td>List(String)</td>
+        <td>+</td>
+        <td>List of Kafka brokers. Format is {hostname}:{port}</td>
+    </tr>
+    <tr>
+        <td>kafka:topics</td>
+        <td>List(String)</td>
+        <td>+</td>
+        <td>Topics to read from</td>
+    </tr>
+    <tr>
+        <td>kafka:sasl:protocol</td>
+        <td>String</td>
+        <td></td>
+        <td>SASL protocol, additional settings <a href="#sasl">here</a></td>
+    </tr>
+    <tr>
+        <td>kafka:rebalance_timeout</td>
+        <td>String</td>
+        <td></td>
+        <td>
+            How long all members are allowed to complete work and commit offsets, minus the time it took to detect the rebalance (from a heartbeat). 
+            Default is <code>1m</code>
+        </td>
+    </tr>
+    <tr>
+        <td>kafka:workers_per_topic</td>
+        <td>UInt</td>
+        <td></td>
+        <td>Number of workers (consumers) per 1 topic. Default is <code>1</code></td>
+    </tr>
+    <tr>
+        <td>kafka:batch:size</td>
+        <td>UInt</td>
+        <td></td>
+        <td>Consumer's batch size. Default is <code>10000</code></td>
+    </tr>
+    <tr>
+        <td>kafka:batch:timeout</td>
+        <td>String</td>
+        <td></td>
+        <td>Consumer's batch timeout. Default is <code>5s</code></td>
+    </tr>
+    <tr>
+        <td>kafka:fetch_max_bytes</td>
+        <td>UInt</td>
+        <td></td>
+        <td>
+            Maximum amount of bytes a broker will try to send during a fetch.
+            Note that brokers may not obey this limit if it has records larger than this limit. Also note that this 
+            client sends a fetch to each broker concurrently, meaning the client will buffer up to brokers * max bytes worth of memory. 
+            This corresponds to the Java fetch.max.bytes setting.
+            Default: <code>52428800</code> (50MB)
+        </td>
+    </tr>
+    <tr>
+        <td>kafka:fetch_max_partition_bytes</td>
+        <td>UInt</td>
+        <td></td>
+        <td>
+            Maximum amount of bytes that will be consumed for a single partition in a fetch request. 
+            Note that if a single batch is larger than this number, that batch will still be returned so the client can make progress.
+            This corresponds to the Java max.partition.fetch.bytes setting.
+            Default: <code>1048576</code> (1MB)
+        </td>
+    </tr>
+    <tr>
+        <td>s3:url</td>
+        <td>String</td>
+        <td>+</td>
+        <td>Connection URL</td>
+    </tr>
+    <tr>
+        <td>s3:bucket</td>
+        <td>String</td>
+        <td>+</td>
+        <td>Bucket name</td>
+    </tr>
+    <tr>
+        <td>s3:id</td>
+        <td>String</td>
+        <td>+</td>
+        <td>Access key ID (v4)</td>
+    </tr>
+    <tr>
+        <td>s3:secret</td>
+        <td>String</td>
+        <td>+</td>
+        <td>Secret access key (V4)</td>
+    </tr>
+    <tr>
+        <td>s3:ssl</td>
+        <td>Bool</td>
+        <td></td>
+        <td>use SSL connection</td>
+    </tr>
+    <tr>
+        <td>group_time_interval</td>
+        <td>String</td>
+        <td></td>
+        <td>Describes how records' datetime is rounded down and collected into groups in S3. Default: <code>1h</code></td>
+    </tr>
+</table>
 
 ## s3.Backup
 No description
