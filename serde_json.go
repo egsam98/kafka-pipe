@@ -59,6 +59,10 @@ func (j *JSON) Deserialize(dst any, _ string, src []byte) error {
 	return iter.Error
 }
 
+func (*JSON) Tag() string {
+	return "json"
+}
+
 func timeDecoder(ptr unsafe.Pointer, iter *jsoniter.Iterator) {
 	format := RFC3339
 	if j, ok := iter.Attachment.(*JSON); ok {

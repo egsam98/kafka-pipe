@@ -9,6 +9,7 @@ import (
 
 type Serde interface {
 	Deserialize(dst any, topic string, src []byte) error
+	Tag() string
 }
 
 func NewSerdeFromYAML(value yaml.Node) (Serde, error) {

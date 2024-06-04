@@ -154,7 +154,7 @@ func (s *Sink) chBatchStatic(ctx context.Context, batch driver.Batch, records []
 }
 
 func (s *Sink) chBatchReflect(batch driver.Batch, records []*kgo.Record) error {
-	structType, err := tableSchema(batch.Columns())
+	structType, err := tableSchema(batch.Columns(), s.cfg.Serde.Tag())
 	if err != nil {
 		return err
 	}
@@ -171,14 +171,14 @@ func (s *Sink) chBatchReflect(batch driver.Batch, records []*kgo.Record) error {
 	return nil
 }
 
-func tableSchema(columns []column.Interface) (reflect.Type, error) {
+func tableSchema(columns []column.Interface, tag string) (reflect.Type, error) {
 	fields := make([]reflect.StructField, len(columns))
 	for i, col := range columns {
 		name := col.Name()
 		fields[i] = reflect.StructField{
 			Name: cases.Title(language.Und).String(name),
 			Type: col.ScanType(),
-			Tag:  reflect.StructTag(fmt.Sprintf("json:%q ch:%q", name, name)),
+			Tag:  reflect.StructTag(fmt.Sprintf("%s:%q ch:%q", tag, name, name)),
 		}
 	}
 	return reflect.StructOf(fields), nil

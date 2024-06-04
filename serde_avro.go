@@ -67,3 +67,7 @@ func (a *Avro) Deserialize(dst any, topic string, src []byte) error {
 	}
 	return avro.Unmarshal(schema, src, dst)
 }
+
+func (*Avro) Tag() string {
+	return "avro"
+}
