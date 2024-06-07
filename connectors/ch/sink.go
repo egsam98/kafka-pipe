@@ -107,7 +107,8 @@ func (s *Sink) chWrite(ctx context.Context, fetches kgo.Fetches) error {
 		return nil
 	}
 
-	table := s.router.Route(records[0].Topic)
+	topic := records[0].Topic
+	table := s.router.Route(topic)
 	batch, err := s.chConn.PrepareBatch(ctx, fmt.Sprintf(`INSERT INTO %s.%q`, s.cfg.ClickHouse.Database, table))
 	if err != nil {
 		return errors.Wrap(err, "ClickHouse: Prepare batch")
@@ -136,7 +137,7 @@ func (s *Sink) chWrite(ctx context.Context, fetches kgo.Fetches) error {
 	})
 	s.batchState.Unlock()
 
-	log.Info().Int("size", len(records)).Msg("ClickHouse: batch is successfully sent")
+	log.Info().Str("topic", topic).Int("size", len(records)).Msg("ClickHouse: batch is successfully sent")
 	return nil
 }
 
@@ -154,24 +155,21 @@ func (s *Sink) chBatchStatic(ctx context.Context, batch driver.Batch, records []
 }
 
 func (s *Sink) chBatchReflect(batch driver.Batch, records []*kgo.Record) error {
-	structType, err := tableSchema(batch.Columns(), s.cfg.Serde.Tag())
-	if err != nil {
-		return err
-	}
-
+	structType := tableSchema(batch.Columns(), s.cfg.Serde.Tag())
 	for _, rec := range records {
 		data := reflect.New(structType).Interface()
 		if err := s.cfg.Serde.Deserialize(data, rec.Topic, rec.Value); err != nil {
-			return errors.Wrapf(err, "Deserialize message %q using %T", string(rec.Value), s.cfg.Serde)
+			return errors.Wrapf(err, "Deserialize message %s using %T (%s/%d/%d)", string(rec.Value), s.cfg.Serde,
+				rec.Topic, rec.Partition, rec.Offset)
 		}
 		if err := batch.AppendStruct(data); err != nil {
-			return errors.Wrap(err, "ClickHouse")
+			return errors.Wrapf(err, "ClickHouse (%s/%d/%d)", rec.Topic, rec.Partition, rec.Offset)
 		}
 	}
 	return nil
 }
 
-func tableSchema(columns []column.Interface, tag string) (reflect.Type, error) {
+func tableSchema(columns []column.Interface, tag string) reflect.Type {
 	fields := make([]reflect.StructField, len(columns))
 	for i, col := range columns {
 		name := col.Name()
@@ -181,7 +179,7 @@ func tableSchema(columns []column.Interface, tag string) (reflect.Type, error) {
 			Tag:  reflect.StructTag(fmt.Sprintf("%s:%q ch:%q", tag, name, name)),
 		}
 	}
-	return reflect.StructOf(fields), nil
+	return reflect.StructOf(fields)
 }
 
 type batchState struct {
