@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
@@ -109,7 +110,22 @@ func (s *Sink) chWrite(ctx context.Context, fetches kgo.Fetches) error {
 
 	topic := records[0].Topic
 	table := s.router.Route(topic)
-	batch, err := s.chConn.PrepareBatch(ctx, fmt.Sprintf(`INSERT INTO %s.%q`, s.cfg.ClickHouse.Database, table))
+
+	columnsMeta, err := s.columnsMeta(ctx, table)
+	if err != nil {
+		return err
+	}
+
+	// Prepare batch (columns with DEFAULT-clause are ignored)
+	var columnNames strings.Builder
+	for i, meta := range columnsMeta {
+		if i > 0 {
+			columnNames.WriteByte(',')
+		}
+		columnNames.WriteString(meta.Name)
+	}
+	batch, err := s.chConn.PrepareBatch(ctx,
+		fmt.Sprintf(`INSERT INTO %s.%q (%s)`, s.cfg.ClickHouse.Database, table, &columnNames))
 	if err != nil {
 		return errors.Wrap(err, "ClickHouse: Prepare batch")
 	}
@@ -119,7 +135,7 @@ func (s *Sink) chWrite(ctx context.Context, fetches kgo.Fetches) error {
 	if s.cfg.BeforeInsert != nil {
 		err = s.chBatchStatic(ctx, batch, records)
 	} else {
-		err = s.chBatchReflect(batch, records)
+		err = s.chBatchReflect(batch, columnsMeta, records)
 	}
 	if err != nil {
 		return err
@@ -141,21 +157,34 @@ func (s *Sink) chWrite(ctx context.Context, fetches kgo.Fetches) error {
 	return nil
 }
 
-func (s *Sink) chBatchStatic(ctx context.Context, batch driver.Batch, records []*kgo.Record) error {
-	values, err := s.cfg.BeforeInsert(ctx, s.cfg.Serde, records)
+func (s *Sink) chBatchStatic(ctx context.Context, batch driver.Batch, recs []*kgo.Record) error {
+	values, err := s.cfg.BeforeInsert(ctx, s.cfg.Serde, recs)
 	if err != nil {
-		return errors.Wrap(err, "BeforeInsert")
+		return errors.Wrapf(err, "BeforeInsert (%s)", recs[0].Topic)
 	}
 	for _, value := range values {
 		if err := batch.AppendStruct(value); err != nil {
-			return errors.Wrap(err, "ClickHouse")
+			return errors.Wrapf(err, "ClickHouse (%s)", recs[0].Topic)
 		}
 	}
 	return nil
 }
 
-func (s *Sink) chBatchReflect(batch driver.Batch, records []*kgo.Record) error {
-	structType := tableSchema(batch.Columns(), s.cfg.Serde.Tag())
+func (s *Sink) chBatchReflect(batch driver.Batch, columnMetas []columnMeta, records []*kgo.Record) error {
+	fields := make([]reflect.StructField, len(columnMetas))
+	for i, meta := range columnMetas {
+		colType, err := column.Type(meta.Type).Column(meta.Name, nil)
+		if err != nil {
+			return errors.Wrapf(err, "ClickHouse: define Go-type for column %s", meta.Name)
+		}
+		fields[i] = reflect.StructField{
+			Name: cases.Title(language.Und).String(meta.Name),
+			Type: colType.ScanType(),
+			Tag:  reflect.StructTag(fmt.Sprintf("%s:%q ch:%q", s.cfg.Serde.Tag(), meta.Name, meta.Name)),
+		}
+	}
+	structType := reflect.StructOf(fields)
+
 	for _, rec := range records {
 		data := reflect.New(structType).Interface()
 		if err := s.cfg.Serde.Deserialize(data, rec.Topic, rec.Value); err != nil {
@@ -169,17 +198,38 @@ func (s *Sink) chBatchReflect(batch driver.Batch, records []*kgo.Record) error {
 	return nil
 }
 
-func tableSchema(columns []column.Interface, tag string) reflect.Type {
-	fields := make([]reflect.StructField, len(columns))
-	for i, col := range columns {
-		name := col.Name()
-		fields[i] = reflect.StructField{
-			Name: cases.Title(language.Und).String(name),
-			Type: col.ScanType(),
-			Tag:  reflect.StructTag(fmt.Sprintf("%s:%q ch:%q", tag, name, name)),
-		}
+type columnMeta struct {
+	Name string `ch:"name"`
+	Type string `ch:"type"`
+}
+
+// columnsMeta collects columns metadata excluding ones with DEFAULT-clause
+func (s *Sink) columnsMeta(ctx context.Context, table string) ([]columnMeta, error) {
+	const sql = `SELECT name, type, default_expression FROM system.columns WHERE database = $1 AND table = $2`
+	rows, err := s.chConn.Query(ctx, sql, s.cfg.ClickHouse.Database, table)
+	if err != nil {
+		return nil, errors.Wrap(err, "ClickHouse: query columns metadata")
 	}
-	return reflect.StructOf(fields)
+	defer rows.Close()
+
+	var metas []columnMeta
+	for rows.Next() {
+		var row struct {
+			columnMeta
+			DefaultExpression string `ch:"default_expression"`
+		}
+		if err := rows.ScanStruct(&row); err != nil {
+			return nil, errors.Wrap(err, "ClickHouse")
+		}
+		if row.DefaultExpression != "" {
+			continue
+		}
+		metas = append(metas, row.columnMeta)
+	}
+	if len(metas) == 0 {
+		return nil, errors.Errorf("ClickHouse: no columns found for table %s", table)
+	}
+	return metas, nil
 }
 
 type batchState struct {
