@@ -9,7 +9,6 @@ import (
 	"regexp"
 	"strconv"
 	"time"
-	"unsafe"
 
 	jsoniter "github.com/json-iterator/go"
 	"github.com/minio/minio-go/v7"
@@ -97,7 +96,7 @@ func (s *Sink) listen(fetches kgo.Fetches) error {
 		}
 		enc.maxOffset = rec.Offset
 
-		enc.WriteVal(newRow(rec))
+		enc.WriteVal(newJsonRow(rec))
 		enc.WriteRaw("\n")
 		if err := enc.Flush(); err != nil {
 			return errors.Wrapf(err, "encode Kafka record: %+v", *rec)
@@ -221,38 +220,4 @@ func (e *encoder) buffered() (io.Reader, int64) {
 func (e *encoder) close() error {
 	jsoniter.ConfigDefault.ReturnStream(e.Stream)
 	return errors.WithStack(e.gzw.Close())
-}
-
-// row represents a line of encoded data in S3
-type row struct {
-	Offset  int64    `json:"offset"`
-	Key     string   `json:"key"`
-	Value   string   `json:"value"`
-	Headers []header `json:"headers"`
-}
-
-func newRow(rec *kgo.Record) row {
-	r := row{
-		Offset:  rec.Offset,
-		Headers: make([]header, len(rec.Headers)),
-	}
-	if n := len(rec.Key); n > 0 {
-		r.Key = unsafe.String(&rec.Key[0], n)
-	}
-	if n := len(rec.Value); n > 0 {
-		r.Value = unsafe.String(&rec.Value[0], n)
-	}
-	for i, h := range rec.Headers {
-		hr := header{Key: h.Key}
-		if n := len(h.Value); n > 0 {
-			hr.Value = unsafe.String(&h.Value[0], n)
-		}
-		r.Headers[i] = hr
-	}
-	return r
-}
-
-type header struct {
-	Key   string `json:"key"`
-	Value string `json:"value"`
 }

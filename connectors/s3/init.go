@@ -17,7 +17,11 @@ func init() {
 		cfg.DB = config.Storage
 		return NewSink(cfg), nil
 	})
-	registry.Register("s3.Backup", func(cfg registry.Config) (kafkapipe.Connector, error) {
+	registry.Register("s3.Backup", func(config registry.Config) (kafkapipe.Connector, error) {
+		var cfg BackupConfig
+		if err := yaml.Unmarshal(config.Raw, &cfg); err != nil {
+			return nil, errors.Wrap(err, "parse s3.Backup config")
+		}
 		return NewBackup(cfg)
 	})
 }
