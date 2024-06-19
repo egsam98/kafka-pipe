@@ -30,4 +30,5 @@ type BackupConfig struct {
 	Topics    []string                 `yaml:"topics" validate:"min=1"`
 	DateSince time.Time                `yaml:"-" validate:"required"`
 	DateTo    time.Time                `yaml:"-" validate:"required"`
+	DB        *badger.DB               `yaml:"-" validate:"required"`
 }

@@ -29,6 +29,7 @@ func init() {
 		}
 		cfg.BackupConfig.DateSince = cfg.DateSince.Time
 		cfg.BackupConfig.DateTo = cfg.DateTo.Time
+		cfg.DB = config.Storage
 		return NewBackup(cfg.BackupConfig)
 	})
 }
