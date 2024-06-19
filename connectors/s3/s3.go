@@ -1,10 +1,13 @@
 package s3
 
 import (
+	"regexp"
 	"unsafe"
 
 	"github.com/twmb/franz-go/pkg/kgo"
 )
+
+var regexKeySuffix = regexp.MustCompile(`/(\d\d\d\d-\d\d-\d\d \d\d:\d\d:\d\d)/\d+/(\d+)-(\d+).gz$`)
 
 // jsonRow represents a line of encoded data in S3
 type jsonRow struct {
@@ -40,12 +43,11 @@ func newJsonRow(rec *kgo.Record) jsonRow {
 	return r
 }
 
-func (j *jsonRow) kafkaRecord(topic string) kgo.Record {
+func (j *jsonRow) kafkaRecord() kgo.Record {
 	rec := kgo.Record{
 		Key:     unsafe.Slice(unsafe.StringData(j.Key), len(j.Key)),
 		Value:   unsafe.Slice(unsafe.StringData(j.Value), len(j.Value)),
 		Headers: make([]kgo.RecordHeader, len(j.Headers)),
-		Topic:   topic,
 	}
 	for i, h := range j.Headers {
 		rec.Headers[i] = kgo.RecordHeader{

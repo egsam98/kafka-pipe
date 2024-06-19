@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"regexp"
 	"strconv"
 	"time"
 
@@ -24,7 +23,6 @@ import (
 )
 
 const maxMergeKeySize = 5 * 1024 * 1024 // 5MB
-var regexKeySuffix = regexp.MustCompile(`/\d\d\d\d-\d\d-\d\d \d\d:\d\d:\d\d/\d+/(\d+)-(\d+).gz$`)
 
 type Sink struct {
 	cfg        SinkConfig
@@ -139,11 +137,11 @@ func (s *Sink) s3Write(prefix string, enc *encoder) error {
 
 	if prevObj.Key != "" {
 		parts := regexKeySuffix.FindStringSubmatch(prevObj.Key)
-		if len(parts) < 3 {
+		if len(parts) < 4 {
 			return errors.Errorf("S3: invalid key: %q", prevObj.Key)
 		}
-		prevMinOffset := parts[1]
-		if prevMaxOffset, _ := strconv.ParseInt(parts[2], 10, 64); prevMaxOffset >= enc.maxOffset {
+		prevMinOffset := parts[2]
+		if prevMaxOffset, _ := strconv.ParseInt(parts[3], 10, 64); prevMaxOffset >= enc.maxOffset {
 			log.Warn().Msgf("S3: %d (prev max offset) >= %d (current max offset), skipping key %q",
 				prevMaxOffset, enc.maxOffset, key)
 			return nil
