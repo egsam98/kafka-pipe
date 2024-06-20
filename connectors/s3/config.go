@@ -25,6 +25,7 @@ type ConnConfig struct {
 }
 
 type BackupConfig struct {
+	Name      string      `yaml:"name" validate:"required"`
 	Kafka     KafkaConfig `yaml:"kafka"`
 	S3        ConnConfig  `yaml:"s3"`
 	Topics    []string    `yaml:"topics" validate:"min=1"`

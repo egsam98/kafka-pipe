@@ -3,6 +3,7 @@ package s3
 import (
 	"regexp"
 	"strconv"
+	"time"
 	"unsafe"
 
 	"github.com/pkg/errors"
@@ -23,7 +24,9 @@ func newKeySegments(key string) (keySegments, error) {
 
 func (s keySegments) topic() string { return s[1] }
 
-func (s keySegments) dateTime() string { return s[2] }
+func (s keySegments) dateTime() (time.Time, error) {
+	return time.Parse(time.DateTime, s[2])
+}
 
 func (s keySegments) partition() (int32, error) {
 	i64, err := strconv.ParseInt(s[3], 10, 32)
