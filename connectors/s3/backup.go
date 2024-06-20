@@ -3,11 +3,11 @@ package s3
 import (
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"io"
 	"sync"
 	"time"
 
-	"github.com/egsam98/json-iterator"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/pkg/errors"
@@ -19,6 +19,7 @@ import (
 	"github.com/vbauerster/mpb/v8/decor"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/egsam98/kafka-pipe/internal/syncx"
 	"github.com/egsam98/kafka-pipe/internal/validate"
 )
 
@@ -27,6 +28,8 @@ type Backup struct {
 	s3        *minio.Client
 	producers map[string]*kgo.Client // Topic is the key
 	progress  *mpb.Progress
+	offsets   syncx.Map[string, map[int32]int64]
+	muOffsets sync.RWMutex
 }
 
 func NewBackup(cfg BackupConfig) (*Backup, error) {
@@ -34,6 +37,7 @@ func NewBackup(cfg BackupConfig) (*Backup, error) {
 		cfg:       cfg,
 		producers: make(map[string]*kgo.Client),
 		progress:  mpb.New(mpb.WithWidth(3)),
+		offsets:   syncx.NewMap[string, map[int32]int64](),
 	}, nil
 }
 
@@ -58,7 +62,7 @@ func (b *Backup) Run(ctx context.Context) error {
 	for _, topic := range b.cfg.Topics {
 		if b.producers[topic], err = kgo.NewClient(
 			kgo.SeedBrokers(b.cfg.Kafka.Brokers...),
-			kgo.DefaultProduceTopic(topic),
+			kgo.RecordPartitioner(kgo.ManualPartitioner()),
 			kgo.ProducerBatchCompression(kgo.Lz4Compression()),
 			kgo.MaxBufferedRecords(int(b.cfg.Kafka.Batch.Size)),
 			kgo.ProducerLinger(b.cfg.Kafka.Batch.Timeout),
@@ -71,6 +75,7 @@ func (b *Backup) Run(ctx context.Context) error {
 	}
 
 	// Create Kafka topics
+	// TODO remove
 	kafkaAdmin := kadm.NewClient(b.producers[b.cfg.Topics[0]])
 	for _, topic := range b.cfg.Topics {
 		res, err := kafkaAdmin.CreateTopic(ctx, int32(b.cfg.Kafka.Topic.Partitions), int16(b.cfg.Kafka.Topic.ReplicationFactor), map[string]*string{
@@ -107,7 +112,7 @@ func (b *Backup) backup(ctx context.Context, topic string) error {
 		Recursive: true,
 	})
 
-	producer := newAbortProducer(b.producers[topic], b.progress)
+	producer := newAbortProducer(b.producers[topic], topic, b.progress, &b.offsets)
 	for info := range objInfos {
 		if err := b.backupObject(ctx, &info, &producer); err != nil {
 			_ = producer.wait()
@@ -119,19 +124,19 @@ func (b *Backup) backup(ctx context.Context, topic string) error {
 
 func (b *Backup) backupObject(ctx context.Context, info *minio.ObjectInfo, producer *abortProducer) error {
 	if info.Err != nil {
-		return info.Err
+		return errors.WithStack(info.Err)
 	}
 
-	parts := regexKeySuffix.FindStringSubmatch(info.Key)
-	if len(parts) < 2 {
-		return errors.Errorf("S3: Invalid key: %q", info.Key)
+	segments, err := newKeySegments(info.Key)
+	if err != nil {
+		return err
 	}
-	t, err := time.Parse(time.DateTime, parts[1])
+	dateTime, err := time.Parse(time.DateTime, segments.dateTime())
 	if err != nil {
 		return errors.Wrapf(err, "S3: Parse time from %s", info.Key)
 	}
 
-	if t.Before(b.cfg.DateSince) || t.After(b.cfg.DateTo) {
+	if dateTime.Before(b.cfg.DateSince) || dateTime.After(b.cfg.DateTo) {
 		return nil
 	}
 
@@ -147,51 +152,63 @@ func (b *Backup) backupObject(ctx context.Context, info *minio.ObjectInfo, produ
 	}
 	defer r.Close()
 
-	it := jsoniter.ConfigDefault.BorrowIterator(make([]byte, 1024))
-	defer jsoniter.ConfigDefault.ReturnIterator(it)
-	it.Reset(r)
-
+	dec := json.NewDecoder(r)
 	for i := 0; ; i++ {
 		var row jsonRow
-		it.ReadVal(&row)
-		if it.Error != nil {
-			if it.Error == io.EOF {
+		if err := dec.Decode(&row); err != nil {
+			if err == io.EOF {
 				return nil
 			}
-			return errors.Wrapf(it.Error, "S3: Decode json row from %s (line: %d)", info.Key, i)
+			return errors.Wrapf(err, "S3: Decode json row from %s (line: %d)", info.Key, i)
 		}
 
-		record := row.kafkaRecord()
-		if err := producer.produce(ctx, &record, info.Key); err != nil {
+		topic := segments.topic()
+		partition, err := segments.partition()
+		if err != nil {
+			return err
+		}
+
+		b.offsets.RLock()
+		if partitions, ok := b.offsets.Raw[topic]; ok {
+			if offset, ok := partitions[partition]; ok {
+				if offset >= row.Offset {
+					b.offsets.RUnlock()
+					continue
+				}
+			}
+		}
+		b.offsets.RUnlock()
+
+		record := row.kafkaRecord(topic, partition)
+		if err := producer.produce(ctx, &record, info.Key, row.Offset); err != nil {
 			return err
 		}
 	}
 }
 
 type abortProducer struct {
-	client *kgo.Client
-	wg     sync.WaitGroup
-	err    error
-	muErr  sync.Mutex
-	topic  string
-	bar    *mpb.Bar
+	client  *kgo.Client
+	wg      sync.WaitGroup
+	err     error
+	muErr   sync.Mutex
+	offsets *syncx.Map[string, map[int32]int64]
+	bar     *mpb.Bar
 }
 
-func newAbortProducer(client *kgo.Client, progress *mpb.Progress) abortProducer {
-	topic := client.OptValue(kgo.DefaultProduceTopic).(string)
+func newAbortProducer(client *kgo.Client, topic string, progress *mpb.Progress, offsets *syncx.Map[string, map[int32]int64]) abortProducer {
 	bar := progress.AddSpinner(-1, mpb.AppendDecorators(
 		decor.Name(topic, decor.WCSyncSpace),
 		decor.CurrentNoUnit("(count: %d,", decor.WCSyncSpace),
 		decor.AverageSpeed(0, "speed: %.0f/s)", decor.WCSyncSpace),
 	))
 	return abortProducer{
-		client: client,
-		topic:  topic,
-		bar:    bar,
+		client:  client,
+		offsets: offsets,
+		bar:     bar,
 	}
 }
 
-func (p *abortProducer) produce(ctx context.Context, r *kgo.Record, s3Key string) error {
+func (p *abortProducer) produce(ctx context.Context, r *kgo.Record, s3Key string, s3Offset int64) error {
 	p.muErr.Lock()
 	if p.err != nil {
 		p.muErr.Unlock()
@@ -199,19 +216,32 @@ func (p *abortProducer) produce(ctx context.Context, r *kgo.Record, s3Key string
 	}
 	p.muErr.Unlock()
 
-	r.Topic = p.topic
-	r.Context = context.WithValue(ctx, "s3_key", s3Key)
+	ctx = context.WithValue(ctx, "s3_key", s3Key)
+	ctx = context.WithValue(ctx, "s3_offset", s3Offset)
+	r.Context = ctx
 	p.wg.Add(1)
 
 	p.client.Produce(ctx, r, func(rec *kgo.Record, err error) {
 		defer p.wg.Done()
 		p.bar.Increment()
 
-		//if p.bar.Current() > 100 {
-		//	err = errors.New("Something")
-		//}
-
 		if err == nil {
+			p.offsets.Lock()
+			defer p.offsets.Unlock()
+			partitions, ok := p.offsets.Raw[r.Topic]
+			if !ok {
+				partitions = make(map[int32]int64)
+				p.offsets.Raw[r.Topic] = partitions
+			}
+			offset, ok := partitions[r.Partition]
+			if !ok {
+				offset = -1
+				partitions[r.Partition] = offset
+			}
+			s3Offset := r.Context.Value("s3_offset").(int64)
+			if s3Offset > offset {
+				partitions[r.Partition] = s3Offset
+			}
 			return
 		}
 

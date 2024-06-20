@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"strconv"
 	"time"
 
 	jsoniter "github.com/json-iterator/go"
@@ -136,12 +135,19 @@ func (s *Sink) s3Write(prefix string, enc *encoder) error {
 	var merge bool
 
 	if prevObj.Key != "" {
-		parts := regexKeySuffix.FindStringSubmatch(prevObj.Key)
-		if len(parts) < 4 {
-			return errors.Errorf("S3: invalid key: %q", prevObj.Key)
+		segments, err := newKeySegments(prevObj.Key)
+		if err != nil {
+			return err
 		}
-		prevMinOffset := parts[2]
-		if prevMaxOffset, _ := strconv.ParseInt(parts[3], 10, 64); prevMaxOffset >= enc.maxOffset {
+		prevMinOffset, err := segments.minOffset()
+		if err != nil {
+			return err
+		}
+		prevMaxOffset, err := segments.maxOffset()
+		if err != nil {
+			return err
+		}
+		if prevMaxOffset >= enc.maxOffset {
 			log.Warn().Msgf("S3: %d (prev max offset) >= %d (current max offset), skipping key %q",
 				prevMaxOffset, enc.maxOffset, key)
 			return nil
@@ -156,7 +162,7 @@ func (s *Sink) s3Write(prefix string, enc *encoder) error {
 				return errors.Wrapf(err, "S3: get %q", prevObj.Key)
 			}
 
-			key = fmt.Sprintf("%s/%s-%018d.gz", prefix, prevMinOffset, enc.maxOffset)
+			key = fmt.Sprintf("%s/%018d-%018d.gz", prefix, prevMinOffset, enc.maxOffset)
 			reader = io.MultiReader(obj, reader)
 			n += prevObj.Size
 		}

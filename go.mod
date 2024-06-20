@@ -5,7 +5,6 @@ go 1.22
 require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.23.1
 	github.com/dgraph-io/badger/v4 v4.1.0
-	github.com/egsam98/json-iterator v0.0.0
 	github.com/go-playground/locales v0.14.1
 	github.com/go-playground/universal-translator v0.18.1
 	github.com/go-playground/validator/v10 v10.19.0
@@ -82,5 +81,3 @@ require (
 )
 
 replace github.com/ClickHouse/clickhouse-go/v2 => github.com/egsam98/clickhouse-go/v2 v2.23.2-0.20240430110930-0ff4b8e443a5
-
-replace github.com/egsam98/json-iterator v0.0.0 => ../json-iterator
