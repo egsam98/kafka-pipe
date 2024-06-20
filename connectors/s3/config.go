@@ -25,10 +25,15 @@ type ConnConfig struct {
 }
 
 type BackupConfig struct {
-	Kafka     kafkapipe.ProducerConfig `yaml:"kafka"`
-	S3        ConnConfig               `yaml:"s3"`
-	Topics    []string                 `yaml:"topics" validate:"min=1"`
-	DateSince time.Time                `yaml:"-" validate:"required"`
-	DateTo    time.Time                `yaml:"-" validate:"required"`
-	DB        *badger.DB               `yaml:"-" validate:"required"`
+	Kafka     KafkaConfig `yaml:"kafka"`
+	S3        ConnConfig  `yaml:"s3"`
+	Topics    []string    `yaml:"topics" validate:"min=1"`
+	DateSince time.Time   `yaml:"-" validate:"required"`
+	DateTo    time.Time   `yaml:"-" validate:"required"`
+	DB        *badger.DB  `yaml:"-" validate:"required"`
+}
+
+type KafkaConfig struct {
+	Brokers []string              `yaml:"brokers" validate:"min=1,dive,url"`
+	Batch   kafkapipe.BatchConfig `yaml:"batch"`
 }

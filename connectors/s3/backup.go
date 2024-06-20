@@ -12,8 +12,6 @@ import (
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
-	"github.com/twmb/franz-go/pkg/kadm"
-	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/vbauerster/mpb/v8"
 	"github.com/vbauerster/mpb/v8/decor"
@@ -71,19 +69,6 @@ func (b *Backup) Run(ctx context.Context) error {
 		}
 		if err := b.producers[topic].Ping(ctx); err != nil {
 			return errors.Wrap(err, "Kafka: ping")
-		}
-	}
-
-	// Create Kafka topics
-	// TODO remove
-	kafkaAdmin := kadm.NewClient(b.producers[b.cfg.Topics[0]])
-	for _, topic := range b.cfg.Topics {
-		res, err := kafkaAdmin.CreateTopic(ctx, int32(b.cfg.Kafka.Topic.Partitions), int16(b.cfg.Kafka.Topic.ReplicationFactor), map[string]*string{
-			"compression.type": &b.cfg.Kafka.Topic.CompressionType,
-			"cleanup.policy":   &b.cfg.Kafka.Topic.CleanupPolicy,
-		}, topic)
-		if err != nil && !errors.Is(res.Err, kerr.TopicAlreadyExists) {
-			return errors.Wrapf(err, "create topic %q", topic)
 		}
 	}
 
