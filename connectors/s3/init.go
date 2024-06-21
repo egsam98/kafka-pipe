@@ -6,6 +6,7 @@ import (
 
 	kafkapipe "github.com/egsam98/kafka-pipe"
 	"github.com/egsam98/kafka-pipe/internal/registry"
+	"github.com/egsam98/kafka-pipe/internal/timex"
 )
 
 func init() {
@@ -17,7 +18,18 @@ func init() {
 		cfg.DB = config.Storage
 		return NewSink(cfg), nil
 	})
-	registry.Register("s3.Backup", func(cfg registry.Config) (kafkapipe.Connector, error) {
-		return NewBackup(cfg)
+	registry.Register("s3.Backup", func(config registry.Config) (kafkapipe.Connector, error) {
+		var cfg struct {
+			BackupConfig `yaml:",inline"`
+			DateSince    timex.DateTime `yaml:"date_since"`
+			DateTo       timex.DateTime `yaml:"date_to"`
+		}
+		if err := yaml.Unmarshal(config.Raw, &cfg); err != nil {
+			return nil, errors.Wrap(err, "parse s3.Backup config")
+		}
+		cfg.BackupConfig.DateSince = cfg.DateSince.Time
+		cfg.BackupConfig.DateTo = cfg.DateTo.Time
+		cfg.DB = config.Storage
+		return NewBackup(cfg.BackupConfig)
 	})
 }

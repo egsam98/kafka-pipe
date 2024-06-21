@@ -6,10 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"regexp"
-	"strconv"
 	"time"
-	"unsafe"
 
 	jsoniter "github.com/json-iterator/go"
 	"github.com/minio/minio-go/v7"
@@ -25,7 +22,6 @@ import (
 )
 
 const maxMergeKeySize = 5 * 1024 * 1024 // 5MB
-var regexKeySuffix = regexp.MustCompile(`/\d\d\d\d-\d\d-\d\d \d\d:\d\d:\d\d/\d+/(\d+)-(\d+).gz$`)
 
 type Sink struct {
 	cfg        SinkConfig
@@ -97,7 +93,7 @@ func (s *Sink) listen(fetches kgo.Fetches) error {
 		}
 		enc.maxOffset = rec.Offset
 
-		enc.WriteVal(newRow(rec))
+		enc.WriteVal(newJsonRow(rec))
 		enc.WriteRaw("\n")
 		if err := enc.Flush(); err != nil {
 			return errors.Wrapf(err, "encode Kafka record: %+v", *rec)
@@ -139,12 +135,19 @@ func (s *Sink) s3Write(prefix string, enc *encoder) error {
 	var merge bool
 
 	if prevObj.Key != "" {
-		parts := regexKeySuffix.FindStringSubmatch(prevObj.Key)
-		if len(parts) < 3 {
-			return errors.Errorf("S3: invalid key: %q", prevObj.Key)
+		segments, err := newKeySegments(prevObj.Key)
+		if err != nil {
+			return err
 		}
-		prevMinOffset := parts[1]
-		if prevMaxOffset, _ := strconv.ParseInt(parts[2], 10, 64); prevMaxOffset >= enc.maxOffset {
+		prevMinOffset, err := segments.minOffset()
+		if err != nil {
+			return err
+		}
+		prevMaxOffset, err := segments.maxOffset()
+		if err != nil {
+			return err
+		}
+		if prevMaxOffset >= enc.maxOffset {
 			log.Warn().Msgf("S3: %d (prev max offset) >= %d (current max offset), skipping key %q",
 				prevMaxOffset, enc.maxOffset, key)
 			return nil
@@ -159,7 +162,7 @@ func (s *Sink) s3Write(prefix string, enc *encoder) error {
 				return errors.Wrapf(err, "S3: get %q", prevObj.Key)
 			}
 
-			key = fmt.Sprintf("%s/%s-%018d.gz", prefix, prevMinOffset, enc.maxOffset)
+			key = fmt.Sprintf("%s/%018d-%018d.gz", prefix, prevMinOffset, enc.maxOffset)
 			reader = io.MultiReader(obj, reader)
 			n += prevObj.Size
 		}
@@ -221,38 +224,4 @@ func (e *encoder) buffered() (io.Reader, int64) {
 func (e *encoder) close() error {
 	jsoniter.ConfigDefault.ReturnStream(e.Stream)
 	return errors.WithStack(e.gzw.Close())
-}
-
-// row represents a line of encoded data in S3
-type row struct {
-	Offset  int64    `json:"offset"`
-	Key     string   `json:"key"`
-	Value   string   `json:"value"`
-	Headers []header `json:"headers"`
-}
-
-func newRow(rec *kgo.Record) row {
-	r := row{
-		Offset:  rec.Offset,
-		Headers: make([]header, len(rec.Headers)),
-	}
-	if n := len(rec.Key); n > 0 {
-		r.Key = unsafe.String(&rec.Key[0], n)
-	}
-	if n := len(rec.Value); n > 0 {
-		r.Value = unsafe.String(&rec.Value[0], n)
-	}
-	for i, h := range rec.Headers {
-		hr := header{Key: h.Key}
-		if n := len(h.Value); n > 0 {
-			hr.Value = unsafe.String(&h.Value[0], n)
-		}
-		r.Headers[i] = hr
-	}
-	return r
-}
-
-type header struct {
-	Key   string `json:"key"`
-	Value string `json:"value"`
 }

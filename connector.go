@@ -19,6 +19,19 @@ type Connector interface {
 	Run(ctx context.Context) error
 }
 
+type ProducerConfig struct {
+	Brokers []string `yaml:"brokers" validate:"min=1,dive,url"`
+	Topic   struct {
+		Prefix            string            `yaml:"prefix"`
+		ReplicationFactor uint16            `yaml:"replication.factor" validate:"default=1"`
+		Partitions        uint32            `yaml:"partitions" validate:"default=1"`
+		CleanupPolicy     string            `yaml:"cleanup.policy" validate:"default=delete"`
+		CompressionType   string            `yaml:"compression.type" validate:"default=producer"`
+		Routes            map[string]string `yaml:"routes"`
+	} `yaml:"topic"`
+	Batch BatchConfig `yaml:"batch"`
+}
+
 type ConsumerPoolConfig struct {
 	GroupPrefix            string         `yaml:"group_prefix" validate:"required"`
 	Brokers                []string       `yaml:"brokers" validate:"min=1,dive,url"`
