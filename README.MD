@@ -353,7 +353,84 @@ Config parameters
 </table>
 
 ## s3.Backup
-No description
+Restores Kafka messages from S3 storage back to topics. The connector stops when all selected objects are handled.
+Read offsets are saved to Badger embedded storage and skipped on rescan afterwards.
+
+Config parameters:
+<table>
+    <tr>
+        <th>Name</th>
+        <th>Type</th>
+        <th>Required</th>
+        <th>Description</th>
+    </tr>
+    <tr>
+        <td>kafka:brokers</td>
+        <td>List(String)</td>
+        <td>+</td>
+        <td>List of Kafka brokers. Format is {hostname}:{port}</td>
+    </tr>
+    <tr>
+        <td>kafka:batch:size</td>
+        <td>UInt</td>
+        <td></td>
+        <td>Consumer's batch size. Default is <code>10000</code></td>
+    </tr>
+    <tr>
+        <td>kafka:batch:timeout</td>
+        <td>String</td>
+        <td></td>
+        <td>Consumer's batch timeout. Default is <code>5s</code></td>
+    </tr>
+    <tr>
+        <td>s3:url</td>
+        <td>String</td>
+        <td>+</td>
+        <td>Connection URL</td>
+    </tr>
+    <tr>
+        <td>s3:bucket</td>
+        <td>String</td>
+        <td>+</td>
+        <td>Bucket name</td>
+    </tr>
+    <tr>
+        <td>s3:id</td>
+        <td>String</td>
+        <td>+</td>
+        <td>Access key ID (v4)</td>
+    </tr>
+    <tr>
+        <td>s3:secret</td>
+        <td>String</td>
+        <td>+</td>
+        <td>Secret access key (V4)</td>
+    </tr>
+    <tr>
+        <td>s3:ssl</td>
+        <td>Bool</td>
+        <td></td>
+        <td>use SSL connection</td>
+    </tr>
+    <tr>
+        <td>topics</td>
+        <td>List(String)</td>
+        <td>+</td>
+        <td>Topics to read from</td>
+    </tr>
+    <tr>
+        <td>date_since</td>
+        <td>String</td>
+        <td>+</td>
+        <td>UTC date from the beginning of which to select objects. Format: "2006-01-02 15:04:05"</td>
+    </tr>
+    <tr>
+        <td>date_to</td>
+        <td>String</td>
+        <td>+</td>
+        <td>UTC date by which to select objects. Format: "2006-01-02 15:04:05"</td>
+    </tr>
+</table>
 
 ## SASL
 Specific settings for every SASL protocol. All params are optional.

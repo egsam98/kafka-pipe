@@ -20,7 +20,7 @@ import (
 	"github.com/egsam98/kafka-pipe/internal/validate"
 )
 
-const barTmpl = `{{ cycle . "↖" "↗" "↘" "↙" }} {{ string . "title" }} (total: {{ counters . }}, skipped: {{ string . "skipped" }})`
+const barTmpl = `{{ cycle . "👾  " " 👾 " "  👾"}} {{ string . "key" }} (restored: {{ counters . }}, skipped: {{ string . "skipped" }})`
 
 type Backup struct {
 	cfg          BackupConfig
@@ -97,9 +97,10 @@ func (b *Backup) Run(ctx context.Context) error {
 	// Start progress bars pool
 	b.progress, err = pb.StartPool()
 	if err != nil {
-		return errors.Wrap(err, "start progress bars")
+		log.Warn().Err(err).Msg("Render progress bars")
+	} else {
+		defer b.progress.Stop() //nolint:errcheck
 	}
-	defer b.progress.Stop() //nolint:errcheck
 
 	var g errgroup.Group
 	for _, topic := range b.cfg.Topics {
@@ -118,13 +119,13 @@ func (b *Backup) backup(ctx context.Context, topic string) error {
 	ctx, cancel := context.WithCancel(ctx) // To prevent memory leak after breaking channel consumption
 	defer cancel()
 	objInfos := b.s3.ListObjects(ctx, b.cfg.S3.Bucket, minio.ListObjectsOptions{
-		Prefix:    topic + "/" + b.cfg.DateSince.Format(time.DateTime),
-		Recursive: true,
+		Prefix:     topic + "/",
+		StartAfter: topic + "/" + b.cfg.DateSince.Format(time.DateTime),
+		Recursive:  true,
 	})
 
 	bar := pb.ProgressBarTemplate(barTmpl).
 		New(-1).
-		Set("title", topic).
 		Set("skipped", 0)
 	b.progress.Add(bar)
 
@@ -137,6 +138,7 @@ func (b *Backup) backup(ctx context.Context, topic string) error {
 }
 
 func (b *Backup) backupObject(ctx context.Context, info *minio.ObjectInfo, bar *pb.ProgressBar) error {
+	bar.Set("key", info.Key)
 	if info.Err != nil {
 		return errors.WithStack(info.Err)
 	}
