@@ -8,18 +8,19 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cheggaaa/pb/v3"
 	"github.com/dgraph-io/badger/v4"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
 	"github.com/twmb/franz-go/pkg/kgo"
-	"github.com/vbauerster/mpb/v8"
-	"github.com/vbauerster/mpb/v8/decor"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/egsam98/kafka-pipe/internal/validate"
 )
+
+const barTmpl = `{{ cycle . "↖" "↗" "↘" "↙" }} {{ string . "title" }} (total: {{ counters . }}, skipped: {{ string . "skipped" }})`
 
 type Backup struct {
 	cfg          BackupConfig
@@ -27,7 +28,7 @@ type Backup struct {
 	producers    map[string]*kgo.Client // Topic is the key
 	offsets      map[string]map[int32]int64
 	muOffsets    sync.RWMutex
-	progress     *mpb.Progress
+	progress     *pb.Pool
 	dbOffsetsKey []byte
 }
 
@@ -79,10 +80,6 @@ func (b *Backup) Run(ctx context.Context) error {
 		}
 	}()
 
-	// Init progress bars pool
-	b.progress = mpb.New(mpb.WithWidth(3))
-	defer b.progress.Wait()
-
 	// Restore offsets from Badger
 	if err := b.cfg.DB.View(func(tx *badger.Txn) error {
 		item, err := tx.Get(b.dbOffsetsKey)
@@ -96,6 +93,13 @@ func (b *Backup) Run(ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
+
+	// Start progress bars pool
+	b.progress, err = pb.StartPool()
+	if err != nil {
+		return errors.Wrap(err, "start progress bars")
+	}
+	defer b.progress.Stop() //nolint:errcheck
 
 	var g errgroup.Group
 	for _, topic := range b.cfg.Topics {
@@ -118,21 +122,21 @@ func (b *Backup) backup(ctx context.Context, topic string) error {
 		Recursive: true,
 	})
 
-	bar := b.progress.AddSpinner(-1, mpb.AppendDecorators(
-		decor.Name(topic, decor.WCSyncSpace),
-		decor.CurrentNoUnit("(count: %d,", decor.WCSyncSpace),
-		decor.AverageSpeed(0, "speed: %.0f/s)", decor.WCSyncSpace),
-	))
+	bar := pb.ProgressBarTemplate(barTmpl).
+		New(-1).
+		Set("title", topic).
+		Set("skipped", 0)
+	b.progress.Add(bar)
+
 	for info := range objInfos {
 		if err := b.backupObject(ctx, &info, bar); err != nil {
 			return err
 		}
 	}
-	bar.SetTotal(-1, true)
 	return nil
 }
 
-func (b *Backup) backupObject(ctx context.Context, info *minio.ObjectInfo, bar *mpb.Bar) error {
+func (b *Backup) backupObject(ctx context.Context, info *minio.ObjectInfo, bar *pb.ProgressBar) error {
 	if info.Err != nil {
 		return errors.WithStack(info.Err)
 	}
@@ -186,6 +190,7 @@ func (b *Backup) backupObject(ctx context.Context, info *minio.ObjectInfo, bar *
 		if partitions, ok := b.offsets[topic]; ok {
 			if offset, ok := partitions[partition]; ok {
 				if row.Offset <= offset {
+					bar.Set("skipped", bar.Get("skipped").(int)+1)
 					b.muOffsets.RUnlock()
 					continue
 				}
@@ -209,11 +214,6 @@ func (b *Backup) backupObject(ctx context.Context, info *minio.ObjectInfo, bar *
 		return errors.Wrapf(err, "Kafka: Produce rows from %s", info.Key)
 	}
 
-	// TODO test
-	//if topic == "public.test2" {
-	//	return errors.New("Something")
-	//}
-
 	// Update offsets and save to Badger
 	b.muOffsets.Lock()
 	defer b.muOffsets.Unlock()
@@ -233,6 +233,6 @@ func (b *Backup) backupObject(ctx context.Context, info *minio.ObjectInfo, bar *
 		return errors.Wrap(err, "Badger: update offsets")
 	}
 
-	bar.IncrBy(len(records))
+	bar.Add(len(records))
 	return nil
 }

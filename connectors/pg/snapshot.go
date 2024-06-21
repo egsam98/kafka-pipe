@@ -9,11 +9,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/cheggaaa/pb/v3"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
-	"github.com/schollz/progressbar/v3"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -101,7 +101,7 @@ func (s *Snapshot) query(ctx context.Context, table string) error {
 	if err != nil {
 		return errors.Wrap(err, "query rows count")
 	}
-	count, err := pgx.CollectOneRow(rows, pgx.RowTo[int64])
+	count, err := pgx.CollectOneRow(rows, pgx.RowTo[int])
 	if err != nil {
 		return errors.Wrap(err, "query snapshot rows count")
 	}
@@ -114,7 +114,7 @@ func (s *Snapshot) query(ctx context.Context, table string) error {
 	defer rows.Close()
 
 	var (
-		bar        = progressbar.Default(count)
+		bar        = pb.StartNew(count)
 		produceErr error
 		once       atomic.Bool
 		wg         sync.WaitGroup
@@ -174,7 +174,7 @@ func (s *Snapshot) query(ctx context.Context, table string) error {
 		}, func(_ *kgo.Record, err error) {
 			defer wg.Done()
 			if err == nil {
-				_ = bar.Add(1)
+				bar.Increment()
 				return
 			}
 			if !once.Swap(true) {
@@ -195,7 +195,8 @@ func (s *Snapshot) query(ctx context.Context, table string) error {
 	if err := rows.Err(); err != nil {
 		return errors.Wrap(err, "rows error")
 	}
-	return bar.Close()
+	bar.Finish()
+	return nil
 }
 
 func (s *Snapshot) topic(pgTable string) string {
