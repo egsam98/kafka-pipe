@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -95,6 +96,7 @@ func (s *Snapshot) Run(ctx context.Context) error {
 }
 
 func (s *Snapshot) query(ctx context.Context, table string) error {
+	// Count rows
 	sql := fmt.Sprintf(`SELECT COUNT(data) FROM (SELECT 1 FROM %s %s) data`, table, s.cfg.Pg.Condition)
 	log.Info().Msg("PostgreSQL: " + sql)
 	rows, err := s.db.Query(ctx, sql)
@@ -104,6 +106,22 @@ func (s *Snapshot) query(ctx context.Context, table string) error {
 	count, err := pgx.CollectOneRow(rows, pgx.RowTo[int])
 	if err != nil {
 		return errors.Wrap(err, "query snapshot rows count")
+	}
+
+	// Find primary key's column names
+	schema, tableNoSchema, ok := strings.Cut(table, ".")
+	if !ok {
+		return errors.Errorf("invalid table name: %s. Expected template {schema}.{table}", table)
+	}
+	sql = `SELECT kcu.column_name FROM information_schema.table_constraints tc
+		JOIN information_schema.key_column_usage kcu ON kcu.constraint_name = tc.constraint_name
+		WHERE tc.constraint_type = 'PRIMARY KEY' AND tc.table_schema = $1 AND tc.table_name = $2`
+	if rows, err = s.db.Query(ctx, sql, schema, tableNoSchema); err != nil {
+		return errors.Wrap(err, "Postgres: find primary keys")
+	}
+	primaryKeys, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return errors.Wrap(err, "Postgres: find primary keys")
 	}
 
 	sql = fmt.Sprintf(`SELECT data.*, count(data.*) OVER() AS total FROM (SELECT * FROM %s %s) data`, table, s.cfg.Pg.Condition)
@@ -121,19 +139,24 @@ func (s *Snapshot) query(ctx context.Context, table string) error {
 	)
 
 	for rows.Next() {
-		data, err := pgx.RowToMap(rows)
+		value, err := pgx.RowToMap(rows)
 		if err != nil {
 			produceErr = errors.Wrap(err, "scan into map")
 			break
 		}
-		key, err := kafkaKey(data)
+
+		key := make(map[string]any)
+		for _, pk := range primaryKeys {
+			key[pk] = value[pk]
+		}
+		keyBytes, err := json.Marshal(key)
 		if err != nil {
-			produceErr = errors.Wrap(err, "scan into map")
+			produceErr = errors.Wrapf(err, "marshal Kafka key: %+v", key)
 			break
 		}
-		value, err := json.Marshal(data)
+		valueBytes, err := json.Marshal(value)
 		if err != nil {
-			produceErr = errors.Wrapf(err, "marshal %+v", data)
+			produceErr = errors.Wrapf(err, "marshal Kafka value: %+v", value)
 			break
 		}
 		if produceErr != nil {
@@ -142,8 +165,8 @@ func (s *Snapshot) query(ctx context.Context, table string) error {
 
 		wg.Add(1)
 		s.kafka.Produce(ctx, &kgo.Record{
-			Key:   key,
-			Value: value,
+			Key:   keyBytes,
+			Value: valueBytes,
 			Topic: s.topic(table),
 			Headers: []kgo.RecordHeader{
 				{

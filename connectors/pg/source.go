@@ -44,10 +44,15 @@ type Source struct {
 	topicResolver topicResolver
 }
 
-type WALMessage struct {
+type walMessage struct {
+	Data       *walData
 	Start, End pglogrepl.LSN
-	Relation   string
-	Data       map[string]any
+}
+
+type walData struct {
+	Relation string
+	Key      map[string]any
+	Value    map[string]any
 }
 
 func NewSource(cfg SourceConfig) *Source {
@@ -119,7 +124,7 @@ func (s *Source) Run(ctx context.Context) error {
 		return err
 	}
 
-	msgs := make(chan WALMessage)
+	msgs := make(chan walMessage)
 	var wg sync.WaitGroup
 
 	wg.Add(2)
@@ -247,7 +252,7 @@ func (s *Source) healthPg(ctx context.Context, wg *sync.WaitGroup) {
 }
 
 // listenPgRepl listens publication messages from pg replication slot and writes to channel
-func (s *Source) listenPgRepl(ctx context.Context, msgs chan<- WALMessage, wg *sync.WaitGroup) {
+func (s *Source) listenPgRepl(ctx context.Context, msgs chan<- walMessage, wg *sync.WaitGroup) {
 	defer wg.Done()
 	defer close(msgs)
 
@@ -279,7 +284,7 @@ func (s *Source) listenPgRepl(ctx context.Context, msgs chan<- WALMessage, wg *s
 }
 
 // recvMessage receives message from pg slot and writes to channel
-func (s *Source) recvMessage(ctx context.Context, msgs chan<- WALMessage) error {
+func (s *Source) recvMessage(ctx context.Context, msgs chan<- walMessage) error {
 	msg, err := s.replConn.ReceiveMessage(ctx)
 	if err != nil {
 		if pgconn.Timeout(err) {
@@ -313,20 +318,17 @@ func (s *Source) recvMessage(ctx context.Context, msgs chan<- WALMessage) error 
 		Stringer("wal_end", xld.ServerWALEnd).
 		Msgf("PostgreSQL: Received message %T", xldData)
 
-	var (
-		data     map[string]any
-		relation string
-	)
+	var data *walData
 	switch xldData := xldData.(type) {
 	case *pglogrepl.RelationMessage:
 		s.relations[xldData.RelationID] = xldData
 	case *pglogrepl.InsertMessage:
-		relation, data, err = s.messageData(xldData.RelationID, xldData.Tuple.Columns)
+		data, err = s.messageData(xldData.RelationID, xldData.Tuple.Columns)
 	case *pglogrepl.UpdateMessage:
-		relation, data, err = s.messageData(xldData.RelationID, xldData.NewTuple.Columns)
+		data, err = s.messageData(xldData.RelationID, xldData.NewTuple.Columns)
 	case *pglogrepl.DeleteMessage:
 		if !s.cfg.Pg.SkipDelete {
-			relation, data, err = s.messageData(xldData.RelationID, xldData.OldTuple.Columns)
+			data, err = s.messageData(xldData.RelationID, xldData.OldTuple.Columns)
 		}
 	}
 	if err != nil {
@@ -336,32 +338,38 @@ func (s *Source) recvMessage(ctx context.Context, msgs chan<- WALMessage) error 
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case msgs <- WALMessage{
-		Start:    xld.WALStart,
-		End:      xld.WALStart + pglogrepl.LSN(len(xld.WALData)),
-		Relation: relation,
-		Data:     data,
+	case msgs <- walMessage{
+		Start: xld.WALStart,
+		End:   xld.WALStart + pglogrepl.LSN(len(xld.WALData)),
+		Data:  data,
 	}:
 		return nil
 	}
 }
 
 // messageData returns relation name (schema/namespace is included) and row data
-func (s *Source) messageData(relationID uint32, cols []*pglogrepl.TupleDataColumn) (string, map[string]any, error) {
+func (s *Source) messageData(relationID uint32, cols []*pglogrepl.TupleDataColumn) (*walData, error) {
 	rel, ok := s.relations[relationID]
 	if !ok {
-		return "", nil, errors.Errorf("unknown relation ID=%d", relationID)
+		return nil, errors.Errorf("unknown relation ID=%d", relationID)
 	}
 
 	table := rel.Namespace + "." + rel.RelationName
 	// Skip health check table
 	if strings.HasSuffix(table, s.cfg.Pg.HealthTable) {
-		return "", nil, nil
+		return nil, nil
+	}
+
+	msg := &walData{
+		Relation: table,
+		Key:      make(map[string]any),
+		Value:    make(map[string]any),
 	}
 
 	// Decode columns tuple into Go map
-	data := make(map[string]any)
 	for i, col := range cols {
+		colMeta := rel.Columns[i]
+
 		var value any
 		switch col.DataType {
 		case 'n': // null
@@ -374,7 +382,7 @@ func (s *Source) messageData(relationID uint32, cols []*pglogrepl.TupleDataColum
 				format = pgtype.BinaryFormatCode
 			}
 
-			oid := rel.Columns[i].DataType
+			oid := colMeta.DataType
 			typ, ok := s.typeMap.TypeForOID(oid)
 			if !ok {
 				value = string(col.Data)
@@ -382,17 +390,20 @@ func (s *Source) messageData(relationID uint32, cols []*pglogrepl.TupleDataColum
 			}
 			var err error
 			if value, err = typ.Codec.DecodeValue(s.typeMap, oid, format, col.Data); err != nil {
-				return "", nil, errors.Wrapf(err, "decode %q (OID=%d, format=%d)", string(col.Data), oid, format)
+				return nil, errors.Wrapf(err, "decode %q (OID=%d, format=%d)", string(col.Data), oid, format)
 			}
 		}
 
-		data[rel.Columns[i].Name] = value
+		if colMeta.Flags == 1 {
+			msg.Key[colMeta.Name] = value
+		}
+		msg.Value[colMeta.Name] = value
 	}
-	return table, data, nil
+	return msg, nil
 }
 
 // produceMessages collects WAL messages into batch and produces to Kafka
-func (s *Source) produceMessages(msgs <-chan WALMessage) error {
+func (s *Source) produceMessages(msgs <-chan walMessage) error {
 	batch := make([]*kgo.Record, 0, s.cfg.Kafka.Batch.Size)
 	var latestLSN pglogrepl.LSN
 	ticker := time.NewTicker(s.cfg.Kafka.Batch.Timeout)
@@ -411,18 +422,17 @@ func (s *Source) produceMessages(msgs <-chan WALMessage) error {
 				continue
 			}
 
-			value, err := json.Marshal(msg.Data)
+			key, err := json.Marshal(msg.Data.Key)
 			if err != nil {
-				return errors.Wrapf(err, "marshal WAL message data: %+v", msg.Data)
+				return errors.Wrapf(err, "marshal WAL message's key: %+v", msg.Data.Key)
 			}
-
-			key, err := kafkaKey(msg.Data)
+			value, err := json.Marshal(msg.Data.Value)
 			if err != nil {
-				return err
+				return errors.Wrapf(err, "marshal WAL message's value: %+v", msg.Data.Value)
 			}
 
 			batch = append(batch, &kgo.Record{
-				Topic: s.topicResolver.resolve(msg.Relation),
+				Topic: s.topicResolver.resolve(msg.Data.Relation),
 				Key:   key,
 				Value: value,
 				Headers: []kgo.RecordHeader{
@@ -452,7 +462,7 @@ func (s *Source) produceMessages(msgs <-chan WALMessage) error {
 					},
 					{
 						Key:   "relation",
-						Value: []byte(msg.Relation),
+						Value: []byte(msg.Data.Relation),
 					},
 				},
 			})
