@@ -315,10 +315,10 @@ Config parameters
         </td>
     </tr>
     <tr>
-        <td>s3:url</td>
+        <td>s3:endpoint</td>
         <td>String</td>
         <td>+</td>
-        <td>Connection URL</td>
+        <td>Connection endpoint</td>
     </tr>
     <tr>
         <td>s3:bucket</td>
@@ -383,10 +383,10 @@ Config parameters:
         <td>Consumer's batch timeout. Default is <code>5s</code></td>
     </tr>
     <tr>
-        <td>s3:url</td>
+        <td>s3:endpoint</td>
         <td>String</td>
         <td>+</td>
-        <td>Connection URL</td>
+        <td>Connection endpoint</td>
     </tr>
     <tr>
         <td>s3:bucket</td>

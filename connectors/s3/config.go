@@ -17,11 +17,11 @@ type SinkConfig struct {
 }
 
 type ConnConfig struct {
-	SSL    bool   `yaml:"ssl"`
-	URL    string `yaml:"url" validate:"url"`
-	Bucket string `yaml:"bucket" validate:"required"`
-	ID     string `yaml:"id" validate:"required"`
-	Secret string `yaml:"secret" validate:"required"`
+	SSL      bool   `yaml:"ssl"`
+	Endpoint string `yaml:"endpoint" validate:"required"`
+	Bucket   string `yaml:"bucket" validate:"required"`
+	ID       string `yaml:"id" validate:"required"`
+	Secret   string `yaml:"secret" validate:"required"`
 }
 
 type BackupConfig struct {

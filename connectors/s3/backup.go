@@ -48,7 +48,7 @@ func (b *Backup) Run(ctx context.Context) error {
 
 	// Init MinIO client - S3 compatible storage
 	var err error
-	if b.s3, err = minio.New(b.cfg.S3.URL, &minio.Options{
+	if b.s3, err = minio.New(b.cfg.S3.Endpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(b.cfg.S3.ID, b.cfg.S3.Secret, ""),
 		Secure: b.cfg.S3.SSL,
 	}); err != nil {

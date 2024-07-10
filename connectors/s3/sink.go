@@ -45,7 +45,7 @@ func (s *Sink) Run(ctx context.Context) error {
 	}
 
 	// Init MinIO client - S3 compatible storage
-	if s.s3, err = minio.New(s.cfg.S3.URL, &minio.Options{
+	if s.s3, err = minio.New(s.cfg.S3.Endpoint, &minio.Options{
 		Creds:  credentials.NewStaticV4(s.cfg.S3.ID, s.cfg.S3.Secret, ""),
 		Secure: s.cfg.S3.SSL,
 	}); err != nil {
