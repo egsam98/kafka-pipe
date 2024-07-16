@@ -76,7 +76,7 @@ Config parameters
 | kafka:batch:timeout            | String       |          | Producer's batch timeout. Default is `5s`                                                       |
 
 ## ch.Sink
-Transmits events from Kafka topics to ClickHouse. For every consumed topic group ID is created as `{kafka:group_prefix}-{topic}`.
+Transmits events from Kafka topics to ClickHouse.
 
 Config parameters
 
@@ -88,10 +88,10 @@ Config parameters
         <th>Description</th>
     </tr>
     <tr>
-        <td>kafka:group_prefix</td>
+        <td>kafka:group</td>
         <td>String</td>
         <td>+</td>
-        <td>Group ID prefix for group ID `{group_prefix}-{topic}`</td>
+        <td>Group ID</td>
     </tr>
     <tr>
         <td>kafka:brokers</td>
@@ -225,7 +225,7 @@ func BeforeInsert(ctx context.Context, serde Serde, batch []*kgo.Record) ([]any,
 ```
 
 ## s3.Sink
-Transmits events from Kafka topics to S3-compatible storage. For every consumed topic a group ID is created as `{kafka:group_prefix}-{topic}`.
+Transmits events from Kafka topics to S3-compatible storage.
 This connector polls Kafka records according batch settings (see `kafka:batch:*`), groups by truncated datetime + partition and
 then uploads collected data chunks into S3. The storage keys are built by following schema:
 <code>{topic}/{truncated datetime}/{partition}/{min_offset in chunk}-{max_offset in chunk}.gz</code>.
@@ -241,10 +241,10 @@ Config parameters
         <th>Description</th>
     </tr>
     <tr>
-        <td>kafka:group_prefix</td>
+        <td>kafka:group</td>
         <td>String</td>
         <td>+</td>
-        <td>Group ID prefix for group ID `{group_prefix}-{topic}`</td>
+        <td>Group ID</td>
     </tr>
     <tr>
         <td>kafka:brokers</td>

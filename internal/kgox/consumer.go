@@ -23,7 +23,7 @@ func NewConsumerPool(cfg kafkapipe.ConsumerPoolConfig) (ConsumerPool, error) {
 			consum, err := newConsumer(consumerConfig{
 				Brokers:                cfg.Brokers,
 				Topic:                  topic,
-				Group:                  cfg.GroupPrefix + "-" + topic,
+				Group:                  cfg.Group,
 				FetchMaxBytes:          cfg.FetchMaxBytes,
 				FetchMaxPartitionBytes: cfg.FetchMaxPartitionBytes,
 				RebalanceTimeout:       cfg.RebalanceTimeout,

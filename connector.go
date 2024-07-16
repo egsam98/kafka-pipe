@@ -33,7 +33,7 @@ type ProducerConfig struct {
 }
 
 type ConsumerPoolConfig struct {
-	GroupPrefix            string         `yaml:"group_prefix" validate:"required"`
+	Group                  string         `yaml:"group" validate:"required"`
 	Brokers                []string       `yaml:"brokers" validate:"min=1,dive,url"`
 	Topics                 []string       `yaml:"topics" validate:"min=1"`
 	RebalanceTimeout       time.Duration  `yaml:"rebalance_timeout" validate:"default=1m"`
