@@ -60,7 +60,7 @@ func (s *Sink) Run(ctx context.Context) error {
 			Username: s.cfg.ClickHouse.User,
 			Password: s.cfg.ClickHouse.Password,
 		},
-		MaxOpenConns: 10,
+		MaxIdleConns: int(s.cfg.Kafka.WorkersPerTopic) * len(s.cfg.Kafka.Topics),
 	}); err != nil {
 		return errors.Wrap(err, "ClickHouse: Connect")
 	}

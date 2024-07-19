@@ -7,9 +7,9 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
-	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/sasl"
+	"github.com/twmb/franz-go/plugin/kzerolog"
 
 	kafkapipe "github.com/egsam98/kafka-pipe"
 )
@@ -61,7 +61,6 @@ type consumer struct {
 	*kgo.Client
 	topic    string
 	batchCfg kafkapipe.BatchConfig
-	log      *logger
 }
 
 type consumerConfig struct {
@@ -78,7 +77,6 @@ func newConsumer(cfg consumerConfig) (*consumer, error) {
 	c := &consumer{
 		topic:    cfg.Topic,
 		batchCfg: cfg.Batch,
-		log:      newLogger(&log.Logger),
 	}
 
 	opts := []kgo.Opt{
@@ -87,7 +85,7 @@ func newConsumer(cfg consumerConfig) (*consumer, error) {
 		kgo.ConsumerGroup(cfg.Group),
 		kgo.BlockRebalanceOnPoll(),
 		kgo.DisableAutoCommit(),
-		kgo.WithLogger(c.log),
+		kgo.WithLogger(kzerolog.New(&log.Logger)),
 	}
 	if cfg.RebalanceTimeout > 0 {
 		opts = append(opts, kgo.RebalanceTimeout(cfg.RebalanceTimeout))
@@ -144,21 +142,8 @@ func (c *consumer) poll(ctx context.Context, handler Handler) error {
 		return errors.Wrap(err, "Kafka: Fetch error")
 	}
 
-	handleCtx, handleCancel := context.WithCancelCause(ctx)
-	defer handleCancel(nil)
-
-	go func() {
-		select {
-		case <-handleCtx.Done():
-		case err := <-c.log.errors():
-			if errors.Is(err, kerr.RebalanceInProgress) {
-				handleCancel(err)
-			}
-		}
-	}()
-
 	for {
-		err := handler(handleCtx, batch)
+		err := handler(ctx, batch)
 		if err == nil {
 			break
 		}
@@ -169,9 +154,9 @@ func (c *consumer) poll(ctx context.Context, handler Handler) error {
 
 		timer := time.NewTimer(5 * time.Second)
 		select {
-		case <-handleCtx.Done():
+		case <-ctx.Done():
 			timer.Stop()
-			return context.Cause(handleCtx)
+			return ctx.Err()
 		case <-timer.C:
 		}
 	}
