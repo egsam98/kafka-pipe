@@ -161,6 +161,7 @@ func (s *Sink) s3Write(prefix string, enc *encoder) error {
 			if err != nil {
 				return errors.Wrapf(err, "S3: get %q", prevObj.Key)
 			}
+			defer obj.Close()
 
 			key = fmt.Sprintf("%s/%018d-%018d.gz", prefix, prevMinOffset, enc.maxOffset)
 			reader = io.MultiReader(obj, reader)
