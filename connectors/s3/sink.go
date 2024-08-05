@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strconv"
 	"time"
 
 	jsoniter "github.com/json-iterator/go"
@@ -22,6 +23,7 @@ import (
 )
 
 const maxMergeKeySize = 5 * 1024 * 1024 // 5MB
+const metaCount = "X-Amz-Meta-Count"
 
 type Sink struct {
 	cfg        SinkConfig
@@ -93,10 +95,8 @@ func (s *Sink) listen(fetches kgo.Fetches) error {
 		}
 		enc.maxOffset = rec.Offset
 
-		enc.WriteVal(newJsonRow(rec))
-		enc.WriteRaw("\n")
-		if err := enc.Flush(); err != nil {
-			return errors.Wrapf(err, "encode Kafka record: %+v", *rec)
+		if err := enc.encode(rec); err != nil {
+			return err
 		}
 	}
 
@@ -123,7 +123,10 @@ func (s *Sink) s3Write(prefix string, enc *encoder) error {
 	ctx, cancel := context.WithCancel(context.Background()) // To prevent memory leak after breaking channel consumption
 	defer cancel()
 	var prevObj minio.ObjectInfo
-	for obj := range s.s3.ListObjects(ctx, s.cfg.S3.Bucket, minio.ListObjectsOptions{Prefix: prefix + "/"}) {
+	for obj := range s.s3.ListObjects(ctx, s.cfg.S3.Bucket, minio.ListObjectsOptions{
+		Prefix:       prefix + "/",
+		WithMetadata: true,
+	}) {
 		if obj.Err != nil {
 			return errors.Wrapf(obj.Err, `S3: list objects by prefix "%s/"`, prefix)
 		}
@@ -131,7 +134,9 @@ func (s *Sink) s3Write(prefix string, enc *encoder) error {
 	}
 
 	key := fmt.Sprintf("%s/%018d-%018d.gz", prefix, enc.minOffset, enc.maxOffset)
-	reader, n := enc.buffered()
+	var reader io.Reader = enc.buf
+	size := int64(enc.buf.Len())
+	count := enc.count
 	var merge bool
 
 	if prevObj.Key != "" {
@@ -165,14 +170,20 @@ func (s *Sink) s3Write(prefix string, enc *encoder) error {
 
 			key = fmt.Sprintf("%s/%018d-%018d.gz", prefix, prevMinOffset, enc.maxOffset)
 			reader = io.MultiReader(obj, reader)
-			n += prevObj.Size
+			size += prevObj.Size
+			prevCount, err := strconv.Atoi(prevObj.UserMetadata[metaCount])
+			if err != nil {
+				return errors.Wrapf(err, "invalid %s metadata in previous object %s", metaCount, prevObj.Key)
+			}
+			count += prevCount
 		}
 	}
 
 	start := time.Now()
-	if _, err := s.s3.PutObject(ctx, s.cfg.S3.Bucket, key, reader, n, minio.PutObjectOptions{
+	if _, err := s.s3.PutObject(ctx, s.cfg.S3.Bucket, key, reader, size, minio.PutObjectOptions{
 		ContentType:     "application/gzip",
 		ContentEncoding: "gzip",
+		UserMetadata:    map[string]string{metaCount: strconv.Itoa(count)},
 	}); err != nil {
 		return errors.Wrapf(err, "S3: Put %q", key)
 	}
@@ -189,7 +200,7 @@ func (s *Sink) s3Write(prefix string, enc *encoder) error {
 	event := log.Info().
 		Int64("messages", enc.maxOffset-enc.minOffset+1).
 		Str("key", key).
-		Int64("size_b", n).
+		Int64("size_b", size).
 		Dur("duration_ms", uploadDur)
 	if merge {
 		event = event.Str("merged_with", prevObj.Key)
@@ -200,10 +211,11 @@ func (s *Sink) s3Write(prefix string, enc *encoder) error {
 
 // encoder writes gzip-compressed JSON data. It also holds accumulated buffer and min/max offsets
 type encoder struct {
-	*jsoniter.Stream
+	count                int
+	minOffset, maxOffset int64
+	stream               *jsoniter.Stream
 	buf                  *bytes.Buffer
 	gzw                  *gzip.Writer
-	minOffset, maxOffset int64
 }
 
 func newEncoder() *encoder {
@@ -211,18 +223,24 @@ func newEncoder() *encoder {
 	gzw, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
 	stream := jsoniter.ConfigDefault.BorrowStream(gzw)
 	return &encoder{
-		Stream:    stream,
+		stream:    stream,
 		buf:       &buf,
 		gzw:       gzw,
 		minOffset: -1,
 	}
 }
 
-func (e *encoder) buffered() (io.Reader, int64) {
-	return e.buf, int64(e.buf.Len())
+func (e *encoder) encode(rec *kgo.Record) error {
+	e.stream.WriteVal(newJsonRow(rec))
+	e.stream.WriteRaw("\n")
+	if err := e.stream.Flush(); err != nil {
+		return errors.Wrapf(err, "encode Kafka record: %+v", *rec)
+	}
+	e.count++
+	return nil
 }
 
 func (e *encoder) close() error {
-	jsoniter.ConfigDefault.ReturnStream(e.Stream)
+	jsoniter.ConfigDefault.ReturnStream(e.stream)
 	return errors.WithStack(e.gzw.Close())
 }
