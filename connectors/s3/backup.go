@@ -13,22 +13,25 @@ import (
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/pkg/errors"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/plugin/kzerolog"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/egsam98/kafka-pipe/internal/progress"
 	"github.com/egsam98/kafka-pipe/internal/validate"
 )
 
-const barTmpl = `{{ cycle . "👾  " " 👾 " "  👾"}} {{ string . "key" }} (restored: {{ counters . }}, skipped: {{ string . "skipped" }})`
+const barTmpl = `{{ cycle . "👾  " " 👾 " "  👾"}} {{ string . "topic" }} (restored: {{ counters . }}, skipped: {{ string . "skipped" }})`
 
 type Backup struct {
 	cfg          BackupConfig
 	s3           *minio.Client
-	producers    map[string]*kgo.Client // Topic is the key
+	producers    map[string]*kgo.Client // Topic as key
 	offsets      map[string]map[int32]int64
 	muOffsets    sync.RWMutex
-	progress     *pb.Pool
+	progress     progress.Pool
 	dbOffsetsKey []byte
 }
 
@@ -59,6 +62,7 @@ func (b *Backup) Run(ctx context.Context) error {
 	}
 
 	// Init Kafka producers
+	kafkaLogger := log.Logger.Level(zerolog.WarnLevel)
 	for _, topic := range b.cfg.Topics {
 		if b.producers[topic], err = kgo.NewClient(
 			kgo.SeedBrokers(b.cfg.Kafka.Brokers...),
@@ -66,11 +70,10 @@ func (b *Backup) Run(ctx context.Context) error {
 			kgo.ProducerBatchCompression(kgo.Lz4Compression()),
 			kgo.MaxBufferedRecords(int(b.cfg.Kafka.Batch.Size)),
 			kgo.ProducerLinger(b.cfg.Kafka.Batch.Timeout),
+			kgo.TransactionalID(b.cfg.Name+"."+topic),
+			kgo.WithLogger(kzerolog.New(&kafkaLogger)),
 		); err != nil {
 			return errors.Wrap(err, "Kafka: init producer")
-		}
-		if err := b.producers[topic].Ping(ctx); err != nil {
-			return errors.Wrap(err, "Kafka: ping")
 		}
 	}
 	defer func() {
@@ -95,12 +98,10 @@ func (b *Backup) Run(ctx context.Context) error {
 	}
 
 	// Start progress bars pool
-	b.progress, err = pb.StartPool()
-	if err != nil {
-		log.Warn().Err(err).Msg("Render progress bars")
-	} else {
-		defer b.progress.Stop() //nolint:errcheck
+	if b.progress, err = pb.StartPool(); err != nil {
+		b.progress = progress.RunPeriodicPool()
 	}
+	defer func() { _ = b.progress.Stop() }()
 
 	var g errgroup.Group
 	for _, topic := range b.cfg.Topics {
@@ -126,6 +127,7 @@ func (b *Backup) backup(ctx context.Context, topic string) error {
 
 	bar := pb.ProgressBarTemplate(barTmpl).
 		New(-1).
+		Set("topic", topic).
 		Set("skipped", 0)
 	b.progress.Add(bar)
 
@@ -138,7 +140,6 @@ func (b *Backup) backup(ctx context.Context, topic string) error {
 }
 
 func (b *Backup) backupObject(ctx context.Context, info *minio.ObjectInfo, bar *pb.ProgressBar) error {
-	bar.Set("key", info.Key)
 	if info.Err != nil {
 		return errors.WithStack(info.Err)
 	}
@@ -208,12 +209,25 @@ func (b *Backup) backupObject(ctx context.Context, info *minio.ObjectInfo, bar *
 	}
 
 	producer := b.producers[topic]
-	promise := kgo.AbortingFirstErrPromise(producer)
-	for _, record := range records {
-		producer.Produce(ctx, record, promise.Promise())
+	if err := producer.BeginTransaction(); err != nil {
+		return errors.Wrap(err, "Kafka: begin tx")
 	}
-	if err := promise.Err(); err != nil {
+	defer func() {
+		if err := producer.EndTransaction(context.Background(), kgo.TryAbort); err != nil {
+			log.Err(err).Msg("Kafka: Abort tx")
+		}
+	}()
+
+	pr := kgo.AbortingFirstErrPromise(producer)
+	for _, record := range records {
+		producer.Produce(ctx, record, pr.Promise())
+	}
+	if err := pr.Err(); err != nil {
 		return errors.Wrapf(err, "Kafka: Produce rows from %s", info.Key)
+	}
+
+	if err := producer.EndTransaction(context.Background(), kgo.TryCommit); err != nil {
+		return errors.Wrap(err, "Kafka: commit tx")
 	}
 
 	// Update offsets and save to Badger

@@ -86,6 +86,7 @@ func newConsumer(cfg consumerConfig) (*consumer, error) {
 		kgo.BlockRebalanceOnPoll(),
 		kgo.DisableAutoCommit(),
 		kgo.WithLogger(kzerolog.New(&log.Logger)),
+		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
 	}
 	if cfg.RebalanceTimeout > 0 {
 		opts = append(opts, kgo.RebalanceTimeout(cfg.RebalanceTimeout))

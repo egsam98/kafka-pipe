@@ -380,7 +380,7 @@ Config parameters:
         <td>kafka:batch:timeout</td>
         <td>String</td>
         <td></td>
-        <td>Consumer's batch timeout. Default is <code>5s</code></td>
+        <td>Consumer's batch timeout. Default is <code>0</code>. Equivalent to producer's linger</td>
     </tr>
     <tr>
         <td>s3:endpoint</td>

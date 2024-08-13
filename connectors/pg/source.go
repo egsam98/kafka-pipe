@@ -22,6 +22,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/plugin/kzerolog"
 
 	kafkapipe "github.com/egsam98/kafka-pipe"
 	"github.com/egsam98/kafka-pipe/internal/set"
@@ -96,6 +97,7 @@ func (s *Source) Run(ctx context.Context) error {
 	// Init Kafka client
 	if s.kafka, err = kgo.NewClient(
 		kgo.SeedBrokers(s.cfg.Kafka.Brokers...),
+		kgo.WithLogger(kzerolog.New(&log.Logger)),
 	); err != nil {
 		return errors.Wrap(err, "init Kafka client")
 	}

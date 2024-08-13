@@ -46,7 +46,7 @@ type ConsumerPoolConfig struct {
 
 type BatchConfig struct {
 	Size    uint          `yaml:"size" validate:"default=10000"`
-	Timeout time.Duration `yaml:"timeout" validate:"default=5s"`
+	Timeout time.Duration `yaml:"timeout" validate:"default=0"`
 }
 
 func (c *ConsumerPoolConfig) UnmarshalYAML(node *yaml.Node) error {
