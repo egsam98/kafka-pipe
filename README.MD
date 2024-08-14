@@ -33,7 +33,10 @@ go get github.com/egsam98/kafka-pipe
 | [s3.Backup](#s3backup)     | S3         | Kafka      |
 
 # Get started
-To start application you want to pass YAML-based configuration as an argument for application.
+To start application you want to pass YAML configuration as an argument for application.
+```sh
+./{kafka-pipe bin} config.yaml
+```
 Common parameters of config:
 ```yaml
 name: "name of your connector"
