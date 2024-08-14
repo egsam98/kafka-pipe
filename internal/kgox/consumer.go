@@ -136,7 +136,7 @@ func (c *consumer) poll(ctx context.Context, handler Handler) error {
 	}
 
 	batch := c.PollRecords(nil, int(c.batchCfg.Size)) //nolint:staticcheck
-	if len(batch) == 0 {
+	if batch.Empty() {
 		return nil
 	}
 	if err := batch.Err(); err != nil {

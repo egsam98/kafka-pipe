@@ -77,9 +77,12 @@ func (s *Sink) Run(ctx context.Context) error {
 }
 
 func (s *Sink) chWrite(ctx context.Context, fetches kgo.Fetches) error {
+	var topic string
 	var records []*kgo.Record
+	skipped := make(map[int32][2]int64)
 	s.batchState.Lock()
 	fetches.EachPartition(func(fs kgo.FetchTopicPartition) {
+		topic = fs.Topic
 		if len(fs.Records) == 0 {
 			return
 		}
@@ -92,10 +95,12 @@ func (s *Sink) chWrite(ctx context.Context, fetches kgo.Fetches) error {
 			}
 			diff := int(offset - fs.Records[0].Offset)
 			if diff >= len(fs.Records)-1 {
+				skipped[fs.Partition] = [2]int64{fs.Records[0].Offset, fs.Records[len(fs.Records)-1].Offset}
 				return
 			}
 			if diff >= 0 {
 				idx = diff
+				skipped[fs.Partition] = [2]int64{fs.Records[0].Offset, fs.Records[diff].Offset}
 			}
 		} else {
 			s.batchState.offsets[fs.Topic] = make(map[int32]int64)
@@ -104,13 +109,15 @@ func (s *Sink) chWrite(ctx context.Context, fetches kgo.Fetches) error {
 		records = append(records, fs.Records[idx+1:]...)
 	})
 	s.batchState.Unlock()
+
+	if len(skipped) > 0 {
+		log.Warn().Str("topic", topic).Interface("offsets_range", skipped).Msg("Skipped records")
+	}
 	if len(records) == 0 {
 		return nil
 	}
 
-	topic := records[0].Topic
 	table := s.router.Route(topic)
-
 	columnsMeta, err := s.columnsMeta(ctx, table)
 	if err != nil {
 		return err

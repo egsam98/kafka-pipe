@@ -1,6 +1,16 @@
-![](/icon.png)
+![](/static/icon.png)
+# Overview
+The project is highly inspired by Kafka Connect, but implemented with Go.
+The project contains several connector classes designed for Change-Data-Capture (CDC) pipeline from specific source to sink. 
+Some of them use internal storage based on Badger embedded database to keep offsets/log positions/other important metadata to prevent
+from data loss or duplication on connection issues. Internal storage is organized in "data" folder in a workspace of running app.
+Keep in my mind to not mix connectors in common workspace until they have unique names ("name" parameter in YAML configuration).
+It's not recommended to recreate Kafka topics and use the same state of connector's internal storage.
+If you have to then you might want to remove "data" folder also, but...
 
-# Install
+![consider_your_position_carefully.gif](static/consider_your_position_carefully.gif)
+
+# Installation
 Docker image:
 ```shell
 docker pull egsam98/kafka-pipe:{tag}
@@ -12,7 +22,7 @@ Go module:
 go get github.com/egsam98/kafka-pipe
 ```
 
-# Supported classes:
+# Supported connector classes:
 | Class                      | Source     | Sink       |
 |----------------------------|------------|------------|
 | [pg.Source](#pgsource)     | PostgreSQL | Kafka      |
@@ -22,7 +32,7 @@ go get github.com/egsam98/kafka-pipe
 | [s3.Backup](#s3backup)     | S3         | Kafka      |
 
 # Get started
-To start application you need to pass YAML-based configuration.
+To start application you want to pass YAML-based configuration as an argument for application.
 Common parameters of config:
 ```yaml
 name: "name of your connector"
@@ -35,7 +45,7 @@ Additional params are particular for every class.
 
 ## pg.Source
 Transmits events from PostgreSQL to Kafka topics via logical replication and "pgoutput" plugin.
-
+Postgres' last read LSN is stored on disk of internal storage.
 Config parameters
 
 | Name                           | Type         | Required | Description                                                                                                                                 |
@@ -76,8 +86,8 @@ Config parameters
 | kafka:batch:timeout            | String       |          | Producer's batch timeout. Default is `5s`                                                       |
 
 ## ch.Sink
-Transmits events from Kafka topics to ClickHouse.
-
+Transmits events from Kafka topics to ClickHouse. Deduplication mechanism is designed similarly to https://github.com/ClickHouse/clickhouse-kafka-connect/blob/main/docs/DESIGN.md#state-machine .
+Kafka partition offsets are additionally stored on disk of internal storage.
 Config parameters
 
 <table>
@@ -354,7 +364,7 @@ Config parameters
 
 ## s3.Backup
 Restores Kafka messages from S3 storage back to topics. The connector stops when all selected objects are handled.
-Read offsets are saved to Badger embedded storage and skipped on rescan afterwards.
+Read offsets are saved to internal storage and skipped on rescan afterwards.
 
 Config parameters:
 <table>
