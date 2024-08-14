@@ -4,6 +4,7 @@ The project is highly inspired by Kafka Connect, but implemented with Go.
 The project contains several connector classes designed for Change-Data-Capture (CDC) pipeline from specific source to sink. 
 Some of them use internal storage based on Badger embedded database to keep offsets/log positions/other important metadata to prevent
 from data loss or duplication on connection issues. Internal storage is organized in "data" folder in a workspace of running app.
+
 Keep in my mind to not mix connectors in common workspace until they have unique names ("name" parameter in YAML configuration).
 It's not recommended to recreate Kafka topics and use the same state of connector's internal storage.
 If you have to then you might want to remove "data" folder also, but...
