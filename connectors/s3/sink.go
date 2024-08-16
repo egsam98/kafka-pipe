@@ -171,9 +171,19 @@ func (s *Sink) s3Write(prefix string, enc *encoder) error {
 			key = fmt.Sprintf("%s/%018d-%018d.gz", prefix, prevMinOffset, enc.maxOffset)
 			reader = io.MultiReader(obj, reader)
 			size += prevObj.Size
-			prevCount, err := strconv.Atoi(prevObj.UserMetadata[metaCount])
+
+			prevCountStr, ok := prevObj.UserMetadata[metaCount]
+			// If S3 storage doesn't return meta from ListObjects call additional HEAD request for prev object
+			if !ok {
+				stat, err := s.s3.StatObject(ctx, s.cfg.S3.Bucket, prevObj.Key, minio.StatObjectOptions{})
+				if err != nil {
+					return errors.Wrapf(err, "S3: stat previous object %s", prevObj.Key)
+				}
+				prevCountStr = stat.Metadata.Get(metaCount)
+			}
+			prevCount, err := strconv.Atoi(prevCountStr)
 			if err != nil {
-				return errors.Wrapf(err, "invalid %s metadata in previous object %s", metaCount, prevObj.Key)
+				return errors.Wrapf(err, "S3: invalid %s metadata in previous object %s", metaCount, prevObj.Key)
 			}
 			count += prevCount
 		}
