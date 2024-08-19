@@ -27,6 +27,7 @@ type ProducerConfig struct {
 		Partitions        uint32            `yaml:"partitions" validate:"default=1"`
 		CleanupPolicy     string            `yaml:"cleanup.policy" validate:"default=delete"`
 		CompressionType   string            `yaml:"compression.type" validate:"default=producer"`
+		Retention         time.Duration     `yaml:"retention" validate:"default=168h"` // 7 days
 		Routes            map[string]string `yaml:"routes"`
 	} `yaml:"topic"`
 	Batch BatchConfig `yaml:"batch"`

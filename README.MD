@@ -66,6 +66,7 @@ Config parameters
 | kafka:topic:partitions         | UInt         |          | Number of partitions. Default is `1`                                                                                                        |
 | kafka:topic:compression.type   | String       |          | Compression type. Default is `producer`                                                                                                     |
 | kafka:topic:cleanup.policy     | String       |          | Cleanup policy. Default is `delete`                                                                                                         |
+| kafka:topic:retention          | String       |          | Retention duration. Default is `168h` (7 days)                                                                                              |
 | kafka:topic:routes             | Dict         |          | Mapping of Postgres relation's regular expression to Kafka topic. Example for partitions: ^public.transaction(_\d+)?$: "public.transaction" |
 | kafka:batch:size               | UInt         |          | Producer's batch size. Default is `10000`                                                                                                   |
 | kafka:batch:timeout            | String       |          | Producer's batch timeout. Default is `5s`                                                                                                   |

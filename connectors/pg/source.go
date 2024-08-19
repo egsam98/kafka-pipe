@@ -109,11 +109,13 @@ func (s *Source) Run(ctx context.Context) error {
 	// Create topics if not exists
 	for _, table := range s.cfg.Pg.Tables {
 		topic := s.topicResolver.resolve(table)
-		res, err := kafkaAdmin.CreateTopic(ctx, int32(s.cfg.Kafka.Topic.Partitions), int16(s.cfg.Kafka.Topic.ReplicationFactor), map[string]*string{
+		retentionMs := strconv.FormatInt(s.cfg.Kafka.Topic.Retention.Milliseconds(), 10)
+		_, err := kafkaAdmin.CreateTopic(ctx, int32(s.cfg.Kafka.Topic.Partitions), int16(s.cfg.Kafka.Topic.ReplicationFactor), map[string]*string{
 			"compression.type": &s.cfg.Kafka.Topic.CompressionType,
 			"cleanup.policy":   &s.cfg.Kafka.Topic.CleanupPolicy,
+			"retention.ms":     &retentionMs,
 		}, topic)
-		if err != nil && !errors.Is(res.Err, kerr.TopicAlreadyExists) {
+		if err != nil && !errors.Is(err, kerr.TopicAlreadyExists) {
 			return errors.Wrapf(err, "create topic %q", topic)
 		}
 	}
