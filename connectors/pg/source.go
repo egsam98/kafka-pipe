@@ -42,7 +42,7 @@ type Source struct {
 	typeMap       *pgtype.Map
 	lsn           pglogrepl.LSN
 	log           zerolog.Logger
-	topicResolver topicResolver
+	topicResolver *topicResolver
 }
 
 type walMessage struct {
@@ -84,7 +84,7 @@ func (s *Source) Run(ctx context.Context) error {
 	}
 
 	var err error
-	if s.topicResolver, err = newTopicResolver(&s.cfg); err != nil {
+	if s.topicResolver, err = newTopicResolver(&s.cfg.Kafka); err != nil {
 		return err
 	}
 
@@ -105,17 +105,22 @@ func (s *Source) Run(ctx context.Context) error {
 		return errors.Wrap(err, "ping Kafka client")
 	}
 
+	topicMapCfg, err := s.cfg.Kafka.TopicMapConfig()
+	if err != nil {
+		return err
+	}
+
 	kafkaAdmin := kadm.NewClient(s.kafka)
 	// Create topics if not exists
 	for _, table := range s.cfg.Pg.Tables {
 		topic := s.topicResolver.resolve(table)
-		retentionMs := strconv.FormatInt(s.cfg.Kafka.Topic.Retention.Milliseconds(), 10)
-		_, err := kafkaAdmin.CreateTopic(ctx, int32(s.cfg.Kafka.Topic.Partitions), int16(s.cfg.Kafka.Topic.ReplicationFactor), map[string]*string{
-			"compression.type": &s.cfg.Kafka.Topic.CompressionType,
-			"cleanup.policy":   &s.cfg.Kafka.Topic.CleanupPolicy,
-			"retention.ms":     &retentionMs,
-		}, topic)
-		if err != nil && !errors.Is(err, kerr.TopicAlreadyExists) {
+		if _, err := kafkaAdmin.CreateTopic(
+			ctx,
+			int32(s.cfg.Kafka.Topic.Partitions),
+			int16(s.cfg.Kafka.Topic.ReplicationFactor),
+			topicMapCfg,
+			topic,
+		); err != nil && !errors.Is(err, kerr.TopicAlreadyExists) {
 			return errors.Wrapf(err, "create topic %q", topic)
 		}
 	}

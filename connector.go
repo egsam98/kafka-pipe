@@ -2,8 +2,10 @@ package kafkapipe
 
 import (
 	"context"
+	"strconv"
 	"time"
 
+	"code.cloudfoundry.org/bytefmt"
 	"github.com/pkg/errors"
 	"github.com/twmb/franz-go/pkg/sasl"
 	"github.com/twmb/franz-go/pkg/sasl/aws"
@@ -28,9 +30,25 @@ type ProducerConfig struct {
 		CleanupPolicy     string            `yaml:"cleanup.policy" validate:"default=delete"`
 		CompressionType   string            `yaml:"compression.type" validate:"default=producer"`
 		Retention         time.Duration     `yaml:"retention" validate:"default=168h"` // 7 days
+		PartRetentionSize string            `yaml:"part_retention_size" validate:"default=10GB"`
 		Routes            map[string]string `yaml:"routes"`
 	} `yaml:"topic"`
 	Batch BatchConfig `yaml:"batch"`
+}
+
+func (c *ProducerConfig) TopicMapConfig() (map[string]*string, error) {
+	retentionMs := strconv.FormatInt(c.Topic.Retention.Milliseconds(), 10)
+	retentionBytes, err := bytefmt.ToBytes(c.Topic.PartRetentionSize)
+	if err != nil {
+		return nil, errors.Wrap(err, "parse part_retention_size: "+c.Topic.PartRetentionSize)
+	}
+	retentionBytesStr := strconv.FormatUint(retentionBytes, 10)
+	return map[string]*string{
+		"compression.type": &c.Topic.CompressionType,
+		"cleanup.policy":   &c.Topic.CleanupPolicy,
+		"retention.ms":     &retentionMs,
+		"retention.bytes":  &retentionBytesStr,
+	}, nil
 }
 
 type ConsumerPoolConfig struct {
@@ -47,7 +65,7 @@ type ConsumerPoolConfig struct {
 
 type BatchConfig struct {
 	Size    uint          `yaml:"size" validate:"default=10000"`
-	Timeout time.Duration `yaml:"timeout" validate:"default=0"`
+	Timeout time.Duration `yaml:"timeout" validate:"default=5s"`
 }
 
 func (c *ConsumerPoolConfig) UnmarshalYAML(node *yaml.Node) error {

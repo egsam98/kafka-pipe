@@ -24,10 +24,11 @@ import (
 )
 
 type Snapshot struct {
-	cfg   SnapshotConfig
-	db    *pgxpool.Pool
-	pgCfg pgxpool.Config
-	kafka *kgo.Client
+	cfg           SnapshotConfig
+	db            *pgxpool.Pool
+	pgCfg         pgxpool.Config
+	kafka         *kgo.Client
+	topicResolver *topicResolver
 }
 
 func NewSnapshot(cfg SnapshotConfig) *Snapshot {
@@ -36,6 +37,11 @@ func NewSnapshot(cfg SnapshotConfig) *Snapshot {
 
 func (s *Snapshot) Run(ctx context.Context) error {
 	if err := validate.Struct(&s.cfg); err != nil {
+		return err
+	}
+
+	var err error
+	if s.topicResolver, err = newTopicResolver(&s.cfg.Kafka); err != nil {
 		return err
 	}
 
@@ -62,15 +68,21 @@ func (s *Snapshot) Run(ctx context.Context) error {
 		return errors.Wrap(err, "ping Kafka client")
 	}
 
+	topicMapCfg, err := s.cfg.Kafka.TopicMapConfig()
+	if err != nil {
+		return err
+	}
 	kafkaAdmin := kadm.NewClient(s.kafka)
 	// Create topics if not exist
 	for _, table := range s.cfg.Pg.Tables {
-		topic := s.topic(table)
-		res, err := kafkaAdmin.CreateTopic(ctx, int32(s.cfg.Kafka.Topic.Partitions), int16(s.cfg.Kafka.Topic.ReplicationFactor), map[string]*string{
-			"compression.type": &s.cfg.Kafka.Topic.CompressionType,
-			"cleanup.policy":   &s.cfg.Kafka.Topic.CleanupPolicy,
-		}, topic)
-		if err != nil && !errors.Is(res.Err, kerr.TopicAlreadyExists) {
+		topic := s.topicResolver.resolve(table)
+		if _, err := kafkaAdmin.CreateTopic(
+			ctx,
+			int32(s.cfg.Kafka.Topic.Partitions),
+			int16(s.cfg.Kafka.Topic.ReplicationFactor),
+			topicMapCfg,
+			topic,
+		); err != nil && !errors.Is(err, kerr.TopicAlreadyExists) {
 			return errors.Wrapf(err, "create topic %q", topic)
 		}
 	}
@@ -167,7 +179,7 @@ func (s *Snapshot) query(ctx context.Context, table string) error {
 		s.kafka.Produce(ctx, &kgo.Record{
 			Key:   keyBytes,
 			Value: valueBytes,
-			Topic: s.topic(table),
+			Topic: s.topicResolver.resolve(table),
 			Headers: []kgo.RecordHeader{
 				{
 					Key:   "version",
@@ -220,12 +232,4 @@ func (s *Snapshot) query(ctx context.Context, table string) error {
 	}
 	bar.Finish()
 	return nil
-}
-
-func (s *Snapshot) topic(pgTable string) string {
-	prefix := s.cfg.Kafka.Topic.Prefix
-	if prefix != "" {
-		prefix += "."
-	}
-	return prefix + pgTable
 }

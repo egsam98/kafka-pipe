@@ -52,43 +52,47 @@ Transmits events from PostgreSQL to Kafka topics via logical replication and "pg
 Postgres' last read LSN is stored on disk of internal storage.
 Config parameters
 
-| Name                           | Type         | Required | Description                                                                                                                                 |
-|--------------------------------|--------------|----------|---------------------------------------------------------------------------------------------------------------------------------------------|
-| pg:skip.delete                 | Bool         |          | Skip delete-events. Default is `false`                                                                                                      |
-| pg:url                         | String       | +        | Postgres connection URL                                                                                                                     |
-| pg:publication                 | String       | +        | Publication name                                                                                                                            |
-| pg:slot                        | String       | +        | Replication slot name                                                                                                                       |
-| pg:tables                      | List(String) | +        | Tables list to subscribe for replication                                                                                                    |
-| pg:health.table                | String       |          | Table name. Default is `public.pipe_health`                                                                                                 |
-| kafka:brokers                  | List(String) | +        | List of Kafka brokers. Format is {hostname}:{port}                                                                                          |
-| kafka:topic:prefix             | String       |          | Prefix for created topics. Format is {prefix}.{postgres table name}                                                                         |
-| kafka:topic:replication.factor | UInt         |          | Topic replication factor. Default is `1`                                                                                                    |
-| kafka:topic:partitions         | UInt         |          | Number of partitions. Default is `1`                                                                                                        |
-| kafka:topic:compression.type   | String       |          | Compression type. Default is `producer`                                                                                                     |
-| kafka:topic:cleanup.policy     | String       |          | Cleanup policy. Default is `delete`                                                                                                         |
-| kafka:topic:retention          | String       |          | Retention duration. Default is `168h` (7 days)                                                                                              |
-| kafka:topic:routes             | Dict         |          | Mapping of Postgres relation's regular expression to Kafka topic. Example for partitions: ^public.transaction(_\d+)?$: "public.transaction" |
-| kafka:batch:size               | UInt         |          | Producer's batch size. Default is `10000`                                                                                                   |
-| kafka:batch:timeout            | String       |          | Producer's batch timeout. Default is `5s`                                                                                                   |
+| Name                            | Type         | Required | Description                                                                                                                                 |
+|---------------------------------|--------------|----------|---------------------------------------------------------------------------------------------------------------------------------------------|
+| pg:skip.delete                  | Bool         |          | Skip delete-events. Default is `false`                                                                                                      |
+| pg:url                          | String       | +        | Postgres connection URL                                                                                                                     |
+| pg:publication                  | String       | +        | Publication name                                                                                                                            |
+| pg:slot                         | String       | +        | Replication slot name                                                                                                                       |
+| pg:tables                       | List(String) | +        | Tables list to subscribe for replication                                                                                                    |
+| pg:health.table                 | String       |          | Table name. Default is `public.pipe_health`                                                                                                 |
+| kafka:brokers                   | List(String) | +        | List of Kafka brokers. Format is {hostname}:{port}                                                                                          |
+| kafka:topic:prefix              | String       |          | Prefix for created topics. Format is {prefix}.{postgres table name}                                                                         |
+| kafka:topic:replication.factor  | UInt         |          | Topic replication factor. Default is `1`                                                                                                    |
+| kafka:topic:partitions          | UInt         |          | Number of partitions. Default is `1`                                                                                                        |
+| kafka:topic:compression.type    | String       |          | Compression type. Default is `producer`                                                                                                     |
+| kafka:topic:cleanup.policy      | String       |          | Cleanup policy. Default is `delete`                                                                                                         |
+| kafka:topic:retention           | String       |          | Retention duration. Default is `168h` (7 days)                                                                                              |
+| kafka:topic:part_retention_size | String       |          | Partition retention size in bytes, kilobytes, megabytes or terabytes. Default: `10GB`                                                       |                                                                       |
+| kafka:topic:routes              | Dict         |          | Mapping of Postgres relation's regular expression to Kafka topic. Example for partitions: ^public.transaction(_\d+)?$: "public.transaction" |
+| kafka:batch:size                | UInt         |          | Producer's batch size. Default is `10000`                                                                                                   |
+| kafka:batch:timeout             | String       |          | Producer's batch timeout. Default is `5s`                                                                                                   |
 
 ## pg.Snapshot
 Selects all/certain rows from tables and supplies to Kafka topics. Connector stops when all rows are produced
 
 Config parameters
 
-| Name                           | Type         | Required | Description                                                                                     |
-|--------------------------------|--------------|----------|-------------------------------------------------------------------------------------------------|
-| pg:url                         | String       | +        | Postgres connection URL                                                                         |
-| pg:tables                      | List(String) | +        | Tables list to execute snapshot                                                                 |
-| pg:condition                   | String       |          | SQL condition part to select rows from table. Example: "WHERE id > 1". Default is empty string. |
-| kafka:brokers                  | List(String) | +        | List of Kafka brokers. Format is {hostname}:{port}                                              |
-| kafka:topic:prefix             | String       | +        | Prefix for created topics. Format is {prefix}.{postgres table name}                             |
-| kafka:topic:replication.factor | UInt         |          | Topic replication factor. Default is `1`                                                        |
-| kafka:topic:partitions         | UInt         |          | Number of partitions. Default is `1`                                                            |
-| kafka:topic:compression.type   | String       |          | Compression type. Default is `producer`                                                         |
-| kafka:topic:cleanup.policy     | String       |          | Cleanup policy. Default is `delete`                                                             |
-| kafka:batch:size               | UInt         |          | Producer's batch size. Default is `10000`                                                       |
-| kafka:batch:timeout            | String       |          | Producer's batch timeout. Default is `5s`                                                       |
+| Name                            | Type         | Required | Description                                                                                                                                 |
+|---------------------------------|--------------|----------|---------------------------------------------------------------------------------------------------------------------------------------------|
+| pg:url                          | String       | +        | Postgres connection URL                                                                                                                     |
+| pg:tables                       | List(String) | +        | Tables list to execute snapshot                                                                                                             |
+| pg:condition                    | String       |          | SQL condition part to select rows from table. Example: "WHERE id > 1". Default is empty string.                                             |
+| kafka:brokers                   | List(String) | +        | List of Kafka brokers. Format is {hostname}:{port}                                                                                          |
+| kafka:topic:prefix              | String       |          | Prefix for created topics. Format is {prefix}.{postgres table name}                                                                         |
+| kafka:topic:replication.factor  | UInt         |          | Topic replication factor. Default is `1`                                                                                                    |
+| kafka:topic:partitions          | UInt         |          | Number of partitions. Default is `1`                                                                                                        |
+| kafka:topic:compression.type    | String       |          | Compression type. Default is `producer`                                                                                                     |
+| kafka:topic:cleanup.policy      | String       |          | Cleanup policy. Default is `delete`                                                                                                         |
+| kafka:topic:retention           | String       |          | Retention duration. Default is `168h` (7 days)                                                                                              |
+| kafka:topic:part_retention_size | String       |          | Partition retention size in bytes, kilobytes, megabytes or terabytes. Default: `10GB`                                                       |                                                                       |
+| kafka:topic:routes              | Dict         |          | Mapping of Postgres relation's regular expression to Kafka topic. Example for partitions: ^public.transaction(_\d+)?$: "public.transaction" |
+| kafka:batch:size                | UInt         |          | Producer's batch size. Default is `10000`                                                                                                   |
+| kafka:batch:timeout             | String       |          | Producer's batch timeout. Default is `5s`                                                                                                   |
 
 ## ch.Sink
 Transmits events from Kafka topics to ClickHouse. Deduplication mechanism is designed similarly to https://github.com/ClickHouse/clickhouse-kafka-connect/blob/main/docs/DESIGN.md#state-machine .

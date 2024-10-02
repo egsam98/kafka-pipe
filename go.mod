@@ -1,8 +1,9 @@
 module github.com/egsam98/kafka-pipe
 
-go 1.22
+go 1.23
 
 require (
+	code.cloudfoundry.org/bytefmt v0.11.0
 	github.com/ClickHouse/clickhouse-go/v2 v2.26.0
 	github.com/cheggaaa/pb/v3 v3.1.5
 	github.com/dgraph-io/badger/v4 v4.1.0
@@ -19,8 +20,8 @@ require (
 	github.com/twmb/franz-go v1.17.0
 	github.com/twmb/franz-go/pkg/kadm v1.11.0
 	github.com/twmb/franz-go/plugin/kzerolog v1.0.0
-	golang.org/x/sync v0.6.0
-	golang.org/x/text v0.15.0
+	golang.org/x/sync v0.8.0
+	golang.org/x/text v0.18.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -68,9 +69,9 @@ require (
 	go.opencensus.io v0.22.5 // indirect
 	go.opentelemetry.io/otel v1.26.0 // indirect
 	go.opentelemetry.io/otel/trace v1.26.0 // indirect
-	golang.org/x/crypto v0.23.0 // indirect
-	golang.org/x/net v0.22.0 // indirect
-	golang.org/x/sys v0.20.0 // indirect
+	golang.org/x/crypto v0.27.0 // indirect
+	golang.org/x/net v0.29.0 // indirect
+	golang.org/x/sys v0.25.0 // indirect
 	google.golang.org/protobuf v1.33.0 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 )

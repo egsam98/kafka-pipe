@@ -3,15 +3,19 @@ package pg
 import (
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/pkg/errors"
+
+	kafkapipe "github.com/egsam98/kafka-pipe"
 )
 
 // topicResolver resolves Kafka topic name by Postgres relation regular expressions
 type topicResolver struct {
-	cfg    *SourceConfig
-	routes []relationTopic
-	cache  map[string]string // map[pg relation]kafka topic
+	cfg     *kafkapipe.ProducerConfig
+	routes  []relationTopic
+	cache   map[string]string // map[pg relation]kafka topic
+	muCache sync.RWMutex
 }
 
 type relationTopic struct {
@@ -19,34 +23,41 @@ type relationTopic struct {
 	kafkaTopic string
 }
 
-func newTopicResolver(cfg *SourceConfig) (topicResolver, error) {
+func newTopicResolver(cfg *kafkapipe.ProducerConfig) (*topicResolver, error) {
 	res := topicResolver{
 		cfg:    cfg,
-		routes: make([]relationTopic, 0, len(cfg.Kafka.Topic.Routes)),
+		routes: make([]relationTopic, 0, len(cfg.Topic.Routes)),
 		cache:  make(map[string]string),
 	}
-	for pgRel, topic := range cfg.Kafka.Topic.Routes {
+	for pgRel, topic := range cfg.Topic.Routes {
 		reg, err := regexp.Compile(pgRel)
 		if err != nil {
-			return topicResolver{}, errors.Wrap(err, "parse Postgres relation regex")
+			return nil, errors.Wrap(err, "parse Postgres relation regex")
 		}
 		res.routes = append(res.routes, relationTopic{
 			pgRelation: *reg,
 			kafkaTopic: topic,
 		})
 	}
-	return res, nil
+	return &res, nil
 }
 
 // resolve Kafka topic by Postgres relation name
 func (t *topicResolver) resolve(pgRelation string) (topic string) {
-	if topic, ok := t.cache[pgRelation]; ok {
+	t.muCache.RLock()
+	topic, ok := t.cache[pgRelation]
+	t.muCache.RUnlock()
+	if ok {
 		return topic
 	}
 
-	defer func() { t.cache[pgRelation] = topic }()
+	defer func() {
+		t.muCache.Lock()
+		t.cache[pgRelation] = topic
+		t.muCache.Unlock()
+	}()
 
-	prefix := t.cfg.Kafka.Topic.Prefix
+	prefix := t.cfg.Topic.Prefix
 	if prefix != "" {
 		prefix += "."
 	}
