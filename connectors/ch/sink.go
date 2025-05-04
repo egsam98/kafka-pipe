@@ -165,13 +165,14 @@ func (s *Sink) chWrite(ctx context.Context, fetches kgo.Fetches) error {
 }
 
 func (s *Sink) chBatchStatic(ctx context.Context, batch driver.Batch, recs []*kgo.Record) error {
-	values, err := s.cfg.BeforeInsert(ctx, s.cfg.Serde, recs)
+	topic := recs[0].Topic
+	values, err := s.cfg.BeforeInsert(ctx, s.cfg.Serde, topic, recs)
 	if err != nil {
-		return errors.Wrapf(err, "BeforeInsert (%s)", recs[0].Topic)
+		return errors.Wrapf(err, "BeforeInsert (%s)", topic)
 	}
 	for _, value := range values {
 		if err := batch.AppendStruct(value); err != nil {
-			return errors.Wrapf(err, "ClickHouse (%s)", recs[0].Topic)
+			return errors.Wrapf(err, "ClickHouse (%s)", topic)
 		}
 	}
 	return nil
@@ -212,7 +213,7 @@ type columnMeta struct {
 
 // columnsMeta collects columns metadata excluding ones with DEFAULT-clause
 func (s *Sink) columnsMeta(ctx context.Context, table string) ([]columnMeta, error) {
-	const sql = `SELECT name, type, default_expression FROM system.columns WHERE database = $1 AND table = $2`
+	const sql = `SELECT name, type FROM system.columns WHERE database = $1 AND table = $2 AND default_expression = ''`
 	rows, err := s.chConn.Query(ctx, sql, s.cfg.ClickHouse.Database, table)
 	if err != nil {
 		return nil, errors.Wrap(err, "ClickHouse: query columns metadata")
@@ -221,17 +222,11 @@ func (s *Sink) columnsMeta(ctx context.Context, table string) ([]columnMeta, err
 
 	var metas []columnMeta
 	for rows.Next() {
-		var row struct {
-			columnMeta
-			DefaultExpression string `ch:"default_expression"`
-		}
-		if err := rows.ScanStruct(&row); err != nil {
+		var meta columnMeta
+		if err := rows.ScanStruct(&meta); err != nil {
 			return nil, errors.Wrap(err, "ClickHouse")
 		}
-		if row.DefaultExpression != "" {
-			continue
-		}
-		metas = append(metas, row.columnMeta)
+		metas = append(metas, meta)
 	}
 	if len(metas) == 0 {
 		return nil, errors.Errorf("ClickHouse: no columns found for table %s", table)

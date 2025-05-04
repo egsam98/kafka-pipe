@@ -50,6 +50,7 @@ Additional params are particular for every class.
 ## pg.Source
 Transmits events from PostgreSQL to Kafka topics via logical replication and "pgoutput" plugin.
 Postgres' last read LSN is stored on disk of internal storage.
+
 Config parameters
 
 | Name                            | Type         | Required | Description                                                                                                                                 |
@@ -97,8 +98,9 @@ Config parameters
 ## ch.Sink
 Transmits events from Kafka topics to ClickHouse. Deduplication mechanism is designed similarly to https://github.com/ClickHouse/clickhouse-kafka-connect/blob/main/docs/DESIGN.md#state-machine .
 Kafka partition offsets are additionally stored on disk of internal storage.
-Config parameters
+For older ClickHouse versions [JSON](https://clickhouse.com/docs/sql-reference/data-types/newjson) support is provided with unquoted `Array(UInt8)` column instead.
 
+Config parameters
 <table>
     <tr>
         <th>Name</th>
@@ -229,14 +231,14 @@ routes:
 Non-YAML configuration (available if you use connector as go-module):
 
 ```go 
-func BeforeInsert(ctx context.Context, serde Serde, batch []*kgo.Record) ([]any, error)
+func BeforeInsert(ctx context.Context, serde Serde, topic string, batch []*kgo.Record) ([]any, error)
 ```
 Hook function that's called per every consumed batch before inserting one into ClickHouse. Due to specific ClickHouse 
 implementations (see [here](https://github.com/ClickHouse/clickhouse-go/blob/6985077eacba9197cd3ac07bbd4cc35f6f86e0dd/conn_batch.go#L181)
 and [here](https://github.com/ClickHouse/clickhouse-go/blob/6985077eacba9197cd3ac07bbd4cc35f6f86e0dd/struct_map.go#L35))
 result must consist of struct pointers, i.e.
 ```go
-func BeforeInsert(ctx context.Context, serde Serde, batch []*kgo.Record) ([]any, error) {
+func BeforeInsert(ctx context.Context, serde Serde, topic string, batch []*kgo.Record) ([]any, error) {
 	// Handle batch
 	// ...
 	return []any{&Data{Column1: 1}, &Data{Column1: 2}}, nil

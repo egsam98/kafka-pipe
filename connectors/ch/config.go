@@ -36,7 +36,7 @@ func (c *SinkConfig) UnmarshalYAML(node *yaml.Node) error {
 	return err
 }
 
-type BeforeInsert func(ctx context.Context, serde kafkapipe.Serde, batch []*kgo.Record) ([]any, error)
+type BeforeInsert func(ctx context.Context, serde kafkapipe.Serde, topic string, batch []*kgo.Record) ([]any, error)
 
 type ClickHouseConfig struct {
 	Database string   `yaml:"database" validate:"required"`

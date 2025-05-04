@@ -1,6 +1,7 @@
 package kafkapipe
 
 import (
+	"encoding/base64"
 	"io"
 	"time"
 	"unsafe"
@@ -20,6 +21,7 @@ func init() {
 		ObjectFieldMustBeSimpleString: true,
 	}.Froze()
 	jsoniter.RegisterTypeDecoderFunc("time.Time", timeDecoder)
+	jsoniter.RegisterTypeDecoderFunc("[]uint8", bytesDecoder)
 }
 
 type TimeFormat string
@@ -59,9 +61,7 @@ func (j *JSON) Deserialize(dst any, _ string, src []byte) error {
 	return iter.Error
 }
 
-func (*JSON) Tag() string {
-	return "json"
-}
+func (*JSON) Tag() string { return "json" }
 
 func timeDecoder(ptr unsafe.Pointer, iter *jsoniter.Iterator) {
 	format := RFC3339
@@ -69,19 +69,53 @@ func timeDecoder(ptr unsafe.Pointer, iter *jsoniter.Iterator) {
 		format = j.timeFormat
 	}
 
+	null := iter.ReadNil()
+	if iter.Error != nil {
+		return
+	}
+	if null {
+		*(*time.Time)(ptr) = time.Time{}
+		return
+	}
+
 	var t time.Time
 	switch format {
 	case RFC3339:
-		var err error
-		if t, err = time.Parse(time.RFC3339, iter.ReadString()); err != nil {
-			iter.Error = err
+		str := iter.ReadString()
+		if iter.Error != nil {
 			return
 		}
+		t, iter.Error = time.Parse(time.RFC3339, str)
 	case Timestamp:
 		t = time.Unix(iter.ReadInt64(), 0)
 	case TimestampMilli:
 		t = time.UnixMilli(iter.ReadInt64())
 	}
 
+	if iter.Error != nil {
+		return
+	}
 	*((*time.Time)(ptr)) = t
+}
+
+func bytesDecoder(ptr unsafe.Pointer, iter *jsoniter.Iterator) {
+	var bytes []byte
+
+	switch iter.WhatIsNext() {
+	case jsoniter.NilValue:
+		iter.Skip()
+	case jsoniter.StringValue:
+		src := iter.ReadString()
+		if iter.Error != nil {
+			return
+		}
+		bytes, iter.Error = base64.StdEncoding.DecodeString(src)
+	default:
+		bytes = iter.SkipAndReturnBytes()
+	}
+
+	if iter.Error != nil {
+		return
+	}
+	*(*[]byte)(ptr) = bytes
 }
