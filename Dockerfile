@@ -1,4 +1,4 @@
-FROM golang:1.23-alpine as BUILDER
+FROM golang:1.23-alpine AS builder
 
 ARG VERSION
 
@@ -12,6 +12,6 @@ RUN CGO_ENABLED=0 go build -ldflags "-X github.com/egsam98/kafka-pipe.Version=$V
 
 FROM alpine
 WORKDIR /app
-COPY --from=BUILDER /app/kafka-pipe /app
+COPY --from=builder /app/kafka-pipe /app
 EXPOSE 8081
 CMD ["/app/kafka-pipe", "/app/config.yaml"]
