@@ -21,10 +21,8 @@ import (
 	_ "github.com/egsam98/kafka-pipe/connectors/ch"
 	_ "github.com/egsam98/kafka-pipe/connectors/pg"
 	_ "github.com/egsam98/kafka-pipe/connectors/s3"
-	"github.com/egsam98/kafka-pipe/internal/registry"
-
 	"github.com/egsam98/kafka-pipe/internal/badgerx"
-	"github.com/egsam98/kafka-pipe/internal/validate"
+	"github.com/egsam98/kafka-pipe/internal/registry"
 )
 
 const HealthAddr = ":8081"
@@ -39,19 +37,20 @@ func main() {
 }
 
 type PreConfig struct {
-	Name  string `yaml:"name" validate:"required"`
-	Class string `yaml:"class" validate:"required"`
-	Log   struct {
-		Pretty bool          `yaml:"pretty"`
-		Level  zerolog.Level `yaml:"level"`
+	// [warden]
+	// required = true
+	Name string `yaml:"name"`
+	// [warden]
+	// required = true
+	Class string `yaml:"class"`
+	// [warden]
+	// dive = true
+	Log struct {
+		Pretty bool `yaml:"pretty"`
+		// [warden]
+		// default = "id:github.com/rs/zerolog.InfoLevel"
+		Level zerolog.Level `yaml:"level"`
 	} `yaml:"log"`
-}
-
-func (c *PreConfig) Parse(src []byte) error {
-	if err := yaml.Unmarshal(src, c); err != nil {
-		return errors.Wrap(err, "decode config class")
-	}
-	return validate.Struct(c)
 }
 
 func run() error {
@@ -65,7 +64,10 @@ func run() error {
 	}
 
 	var cfg PreConfig
-	if err := cfg.Parse(raw); err != nil {
+	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+		return errors.Wrap(err, "decode config class")
+	}
+	if err := cfg.Validate(); err != nil {
 		return err
 	}
 

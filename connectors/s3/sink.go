@@ -19,7 +19,6 @@ import (
 
 	"github.com/egsam98/kafka-pipe/internal/badgerx"
 	"github.com/egsam98/kafka-pipe/internal/kgox"
-	"github.com/egsam98/kafka-pipe/internal/validate"
 )
 
 const maxMergeKeySize = 5 * 1024 * 1024 // 5MB
@@ -36,7 +35,7 @@ func NewSink(cfg SinkConfig) *Sink {
 }
 
 func (s *Sink) Run(ctx context.Context) error {
-	if err := validate.Struct(&s.cfg); err != nil {
+	if err := s.cfg.Validate(); err != nil {
 		return err
 	}
 

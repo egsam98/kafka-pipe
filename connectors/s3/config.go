@@ -9,32 +9,69 @@ import (
 )
 
 type SinkConfig struct {
-	Name              string                       `yaml:"name" validate:"required"`
-	Kafka             kafkapipe.ConsumerPoolConfig `yaml:"kafka"`
-	S3                ConnConfig                   `yaml:"s3"`
-	GroupTimeInterval time.Duration                `yaml:"group_time_interval" validate:"default=1h"`
-	DB                *badger.DB                   `yaml:"-" validate:"required"`
+	// [warden]
+	// required = true
+	Name string `yaml:"name"`
+	// [warden]
+	// dive = true
+	Kafka kafkapipe.ConsumerPoolConfig `yaml:"kafka"`
+	// [warden]
+	// dive = true
+	S3 ConnConfig `yaml:"s3"`
+	// [warden]
+	// default = "1h"
+	GroupTimeInterval time.Duration `yaml:"group_time_interval"`
+	// [warden]
+	// required = true
+	DB *badger.DB `yaml:"-"`
 }
 
 type ConnConfig struct {
-	SSL      bool   `yaml:"ssl"`
-	Endpoint string `yaml:"endpoint" validate:"required"`
-	Bucket   string `yaml:"bucket" validate:"required"`
-	ID       string `yaml:"id" validate:"required"`
-	Secret   string `yaml:"secret" validate:"required"`
+	SSL bool `yaml:"ssl"`
+	// [warden]
+	// required = true
+	Endpoint string `yaml:"endpoint"`
+	// [warden]
+	// required = true
+	Bucket string `yaml:"bucket"`
+	// [warden]
+	// required = true
+	ID string `yaml:"id"`
+	// [warden]
+	// required = true
+	Secret string `yaml:"secret"`
 }
 
 type BackupConfig struct {
-	Name      string      `yaml:"name" validate:"required"`
-	Kafka     KafkaConfig `yaml:"kafka"`
-	S3        ConnConfig  `yaml:"s3"`
-	Topics    []string    `yaml:"topics" validate:"min=1"`
-	DateSince time.Time   `yaml:"-" validate:"required"`
-	DateTo    time.Time   `yaml:"-" validate:"required"`
-	DB        *badger.DB  `yaml:"-" validate:"required"`
+	// [warden]
+	// required = true
+	Name string `yaml:"name"`
+	// [warden]
+	// dive = true
+	Kafka KafkaConfig `yaml:"kafka"`
+	// dive = true
+	S3 ConnConfig `yaml:"s3"`
+	// [warden]
+	// non-empty = true
+	Topics []string `yaml:"topics"`
+	// [warden]
+	// required = true
+	DateSince time.Time `yaml:"-"`
+	// [warden]
+	// required = true
+	DateTo time.Time `yaml:"-"`
+	// [warden]
+	// required = true
+	DB *badger.DB `yaml:"-"`
 }
 
 type KafkaConfig struct {
-	Brokers []string              `yaml:"brokers" validate:"min=1,dive,url"`
-	Batch   kafkapipe.BatchConfig `yaml:"batch"`
+	// [warden]
+	// non-empty = true
+	// [warden.dive]
+	// url = true
+	Brokers []string `yaml:"brokers"`
+	// [warden]
+	// dive = true
+	Batch kafkapipe.BatchConfig `yaml:"batch"`
 }

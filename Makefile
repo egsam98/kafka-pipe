@@ -13,6 +13,9 @@ lint: ## Run linter
 	go mod tidy
 	golangci-lint run
 
+warden: ## Run warden validator codegen
+	warden --tag=yaml ./ ./cmd/app ./connectors/...
+
 build: ## Build docker image
 	docker build --build-arg "VERSION=$(VERSION)" -t $(IMAGE):$(VERSION) .
 

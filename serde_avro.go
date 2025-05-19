@@ -9,8 +9,6 @@ import (
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog/log"
 	"gopkg.in/yaml.v3"
-
-	"github.com/egsam98/kafka-pipe/internal/validate"
 )
 
 type Avro struct {
@@ -52,10 +50,10 @@ func NewAvro(schemas map[string]string) (*Avro, error) {
 
 func newAvroFromYAML(value yaml.Node) (*Avro, error) {
 	var cfg struct {
-		Schemas map[string]string `yaml:"schemas" validate:"required"`
+		Schemas map[string]string `yaml:"schemas"`
 	}
-	if err := validate.StructFromYAML(&cfg, value); err != nil {
-		return nil, err
+	if err := value.Decode(&cfg); err != nil {
+		return nil, errors.Wrapf(err, "decode yaml %q into %T", value.Value, cfg)
 	}
 	return NewAvro(cfg.Schemas)
 }

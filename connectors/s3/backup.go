@@ -20,7 +20,6 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/egsam98/kafka-pipe/internal/progress"
-	"github.com/egsam98/kafka-pipe/internal/validate"
 )
 
 const barTmpl = `{{ cycle . "👾  " " 👾 " "  👾"}} {{ string . "topic" }} (restored: {{ counters . }}, skipped: {{ string . "skipped" }})`
@@ -45,7 +44,7 @@ func NewBackup(cfg BackupConfig) (*Backup, error) {
 }
 
 func (b *Backup) Run(ctx context.Context) error {
-	if err := validate.Struct(&b.cfg); err != nil {
+	if err := b.cfg.Validate(); err != nil {
 		return err
 	}
 

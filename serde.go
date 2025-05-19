@@ -3,8 +3,6 @@ package kafkapipe
 import (
 	"github.com/pkg/errors"
 	"gopkg.in/yaml.v3"
-
-	"github.com/egsam98/kafka-pipe/internal/validate"
 )
 
 type Serde interface {
@@ -32,12 +30,5 @@ func NewSerdeFromYAML(value yaml.Node) (Serde, error) {
 	default:
 		return nil, errors.Errorf(`unknown Serde type: %q. Possible values: [json,avro]`, format.Value)
 	}
-	if err != nil {
-		var vErrs validate.Errors
-		if errors.As(err, &vErrs) {
-			return nil, vErrs.WithNamespace("serde")
-		}
-		return nil, err
-	}
-	return serde, nil
+	return serde, errors.Wrap(err, "serde")
 }

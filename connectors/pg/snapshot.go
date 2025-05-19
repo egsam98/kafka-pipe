@@ -20,7 +20,6 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 
 	kafkapipe "github.com/egsam98/kafka-pipe"
-	"github.com/egsam98/kafka-pipe/internal/validate"
 )
 
 type Snapshot struct {
@@ -36,7 +35,7 @@ func NewSnapshot(cfg SnapshotConfig) *Snapshot {
 }
 
 func (s *Snapshot) Run(ctx context.Context) error {
-	if err := validate.Struct(&s.cfg); err != nil {
+	if err := s.cfg.Validate(); err != nil {
 		return err
 	}
 

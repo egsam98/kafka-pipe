@@ -22,17 +22,37 @@ type Connector interface {
 }
 
 type ProducerConfig struct {
-	Brokers []string `yaml:"brokers" validate:"min=1,dive,url"`
-	Topic   struct {
-		Prefix            string            `yaml:"prefix"`
-		ReplicationFactor uint16            `yaml:"replication.factor" validate:"default=1"`
-		Partitions        uint32            `yaml:"partitions" validate:"default=1"`
-		CleanupPolicy     string            `yaml:"cleanup.policy" validate:"default=delete"`
-		CompressionType   string            `yaml:"compression.type" validate:"default=producer"`
-		Retention         time.Duration     `yaml:"retention" validate:"default=168h"` // 7 days
-		PartRetentionSize string            `yaml:"part_retention_size" validate:"default=10GB"`
+	// [warden]
+	// non-empty = true
+	// [warden.dive]
+	// url = true
+	Brokers []string `yaml:"brokers"`
+	// [warden]
+	// dive = true
+	Topic struct {
+		Prefix string `yaml:"prefix"`
+		// [warden]
+		// default = 1
+		ReplicationFactor uint16 `yaml:"replication.factor"`
+		// [warden]
+		// default = 1
+		Partitions uint32 `yaml:"partitions"`
+		// [warden]
+		// default = "delete"
+		CleanupPolicy string `yaml:"cleanup.policy"`
+		// [warden]
+		// default = "producer"
+		CompressionType string `yaml:"compression.type"`
+		// [warden]
+		// default = "168h"
+		Retention time.Duration `yaml:"retention"`
+		// [warden]
+		// default = "10GB"
+		PartRetentionSize string            `yaml:"part_retention_size"`
 		Routes            map[string]string `yaml:"routes"`
 	} `yaml:"topic"`
+	// [warden]
+	// dive = true
 	Batch BatchConfig `yaml:"batch"`
 }
 
@@ -52,20 +72,38 @@ func (c *ProducerConfig) TopicMapConfig() (map[string]*string, error) {
 }
 
 type ConsumerPoolConfig struct {
-	Group                  string         `yaml:"group" validate:"required"`
-	Brokers                []string       `yaml:"brokers" validate:"min=1,dive,url"`
-	Topics                 []string       `yaml:"topics" validate:"min=1"`
-	RebalanceTimeout       time.Duration  `yaml:"rebalance_timeout" validate:"default=1m"`
-	WorkersPerTopic        uint           `yaml:"workers_per_topic" validate:"default=1"`
-	FetchMaxBytes          uint           `yaml:"fetch_max_bytes"`
-	FetchMaxPartitionBytes uint           `yaml:"fetch_max_partition_bytes"`
-	Batch                  BatchConfig    `yaml:"batch"`
-	SASL                   sasl.Mechanism `yaml:"-"`
+	// [warden]
+	// required = true
+	Group string `yaml:"group"`
+	// [warden]
+	// non-empty = true
+	// [warden.dive]
+	// url = true
+	Brokers []string `yaml:"brokers"`
+	// [warden]
+	// non-empty = true
+	Topics []string `yaml:"topics"`
+	// [warden]
+	// default = "1m"
+	RebalanceTimeout time.Duration `yaml:"rebalance_timeout"`
+	// [warden]
+	// default = 1
+	WorkersPerTopic        uint `yaml:"workers_per_topic"`
+	FetchMaxBytes          uint `yaml:"fetch_max_bytes"`
+	FetchMaxPartitionBytes uint `yaml:"fetch_max_partition_bytes"`
+	// [warden]
+	// dive = true
+	Batch BatchConfig    `yaml:"batch"`
+	SASL  sasl.Mechanism `yaml:"-"`
 }
 
 type BatchConfig struct {
-	Size    uint          `yaml:"size" validate:"default=10000"`
-	Timeout time.Duration `yaml:"timeout" validate:"default=5s"`
+	// [warden]
+	// default = 10000
+	Size uint `yaml:"size"`
+	// [warden]
+	// default = "5s"
+	Timeout time.Duration `yaml:"timeout"`
 }
 
 func (c *ConsumerPoolConfig) UnmarshalYAML(node *yaml.Node) error {

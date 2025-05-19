@@ -26,7 +26,6 @@ import (
 
 	kafkapipe "github.com/egsam98/kafka-pipe"
 	"github.com/egsam98/kafka-pipe/internal/set"
-	"github.com/egsam98/kafka-pipe/internal/validate"
 )
 
 const Plugin = "pgoutput"
@@ -71,7 +70,7 @@ func NewSource(cfg SourceConfig) *Source {
 }
 
 func (s *Source) Run(ctx context.Context) error {
-	if err := validate.Struct(&s.cfg); err != nil {
+	if err := s.cfg.Validate(); err != nil {
 		return err
 	}
 	// Add replication=database query param
@@ -204,7 +203,7 @@ func (s *Source) startReplication(ctx context.Context) error {
 	}
 
 	// Get last committed LSN
-	if err := s.cfg.Storage.View(func(tx *badger.Txn) error {
+	if err := s.cfg.DB.View(func(tx *badger.Txn) error {
 		item, err := tx.Get(s.lsnKey())
 		if err != nil {
 			return err
@@ -515,7 +514,7 @@ func (s *Source) produceMessages(msgs <-chan walMessage) error {
 
 		// Update LSN to Badger storage
 		if latestLSN != 0 {
-			if err := s.cfg.Storage.Update(func(tx *badger.Txn) error {
+			if err := s.cfg.DB.Update(func(tx *badger.Txn) error {
 				return tx.Set(s.lsnKey(), []byte(latestLSN.String()))
 			}); err != nil {
 				return err

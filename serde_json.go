@@ -7,9 +7,8 @@ import (
 	"unsafe"
 
 	jsoniter "github.com/json-iterator/go"
+	"github.com/pkg/errors"
 	"gopkg.in/yaml.v3"
-
-	"github.com/egsam98/kafka-pipe/internal/validate"
 )
 
 func init() {
@@ -25,6 +24,18 @@ func init() {
 }
 
 type TimeFormat string
+
+func (t *TimeFormat) UnmarshalText(text []byte) error {
+	switch val := TimeFormat(text); val {
+	case "":
+		*t = TimestampMilli
+	case RFC3339, TimestampMilli, Timestamp:
+		*t = val
+	default:
+		return errors.Errorf("invalid time_format: %s", text)
+	}
+	return nil
+}
 
 const (
 	RFC3339        TimeFormat = "rfc3339"
@@ -42,10 +53,10 @@ func NewJSON(timeFormat TimeFormat) *JSON {
 
 func newJSONFromYAML(value yaml.Node) (*JSON, error) {
 	var cfg struct {
-		TimeFormat TimeFormat `yaml:"time_format" validate:"default=timestamp-milli,oneof=rfc3339 timestamp timestamp-milli"`
+		TimeFormat TimeFormat `yaml:"time_format"`
 	}
-	if err := validate.StructFromYAML(&cfg, value); err != nil {
-		return nil, err
+	if err := value.Decode(&cfg); err != nil {
+		return nil, errors.Wrapf(err, "decode yaml %q into %T", value.Value, cfg)
 	}
 	return NewJSON(cfg.TimeFormat), nil
 }

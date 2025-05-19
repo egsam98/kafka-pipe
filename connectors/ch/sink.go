@@ -20,7 +20,6 @@ import (
 
 	"github.com/egsam98/kafka-pipe/internal/kgox"
 	"github.com/egsam98/kafka-pipe/internal/router"
-	"github.com/egsam98/kafka-pipe/internal/validate"
 )
 
 type Sink struct {
@@ -36,7 +35,7 @@ func NewSink(cfg SinkConfig) *Sink {
 }
 
 func (s *Sink) Run(ctx context.Context) error {
-	if err := validate.Struct(&s.cfg); err != nil {
+	if err := s.cfg.Validate(); err != nil {
 		return err
 	}
 	var err error

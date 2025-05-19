@@ -14,7 +14,7 @@ func init() {
 		if err := yaml.Unmarshal(config.Raw, &cfg); err != nil {
 			return nil, errors.Wrap(err, "parse pg.Source config")
 		}
-		cfg.Storage = config.Storage
+		cfg.DB = config.Storage
 		return NewSource(cfg), nil
 	})
 	registry.Register("pg.Snapshot", func(config registry.Config) (kafkapipe.Connector, error) {

@@ -11,13 +11,23 @@ import (
 )
 
 type SinkConfig struct {
-	Name         string                       `yaml:"name" validate:"required"`
-	Kafka        kafkapipe.ConsumerPoolConfig `yaml:"kafka"`
-	ClickHouse   ClickHouseConfig             `yaml:"click_house"`
-	Serde        kafkapipe.Serde              `yaml:"-" validate:"required"`
-	DB           *badger.DB                   `yaml:"-" validate:"required"`
-	Routes       map[string]string            `yaml:"routes"`
-	BeforeInsert BeforeInsert                 `yaml:"-"`
+	// [warden]
+	// required = true
+	Name string `yaml:"name"`
+	// [warden]
+	// dive = true
+	Kafka kafkapipe.ConsumerPoolConfig `yaml:"kafka"`
+	// [warden]
+	// dive = true
+	ClickHouse ClickHouseConfig `yaml:"click_house"`
+	// [warden]
+	// required = true
+	Serde kafkapipe.Serde `yaml:"-"`
+	// [warden]
+	// required = true
+	DB           *badger.DB        `yaml:"-"`
+	Routes       map[string]string `yaml:"routes"`
+	BeforeInsert BeforeInsert      `yaml:"-"`
 }
 
 func (c *SinkConfig) UnmarshalYAML(node *yaml.Node) error {
@@ -39,8 +49,16 @@ func (c *SinkConfig) UnmarshalYAML(node *yaml.Node) error {
 type BeforeInsert func(ctx context.Context, serde kafkapipe.Serde, topic string, batch []*kgo.Record) ([]any, error)
 
 type ClickHouseConfig struct {
-	Database string   `yaml:"database" validate:"required"`
-	User     string   `yaml:"user" validate:"required"`
-	Password string   `yaml:"password"`
-	Addrs    []string `yaml:"addrs" validate:"min=1,dive,url"`
+	// [warden]
+	// required = true
+	Database string `yaml:"database"`
+	// [warden]
+	// required = true
+	User     string `yaml:"user"`
+	Password string `yaml:"password"`
+	// [warden]
+	// non-empty = true
+	// [warden.dive]
+	// url = true
+	Addrs []string `yaml:"addrs"`
 }

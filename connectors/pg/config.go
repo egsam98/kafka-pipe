@@ -7,24 +7,50 @@ import (
 )
 
 type SourceConfig struct {
-	Name string `yaml:"name" validate:"required"`
-	Pg   struct {
-		SkipDelete  bool     `yaml:"skip.delete"`
-		Url         string   `yaml:"url" validate:"url"`
-		Publication string   `yaml:"publication" validate:"required"`
-		Slot        string   `yaml:"slot" validate:"required"`
-		Tables      []string `yaml:"tables" validate:"min=1"`
-		HealthTable string   `yaml:"health.table" validate:"default=public.pipe_health"`
+	// [warden]
+	// required = true
+	Name string `yaml:"name"`
+	// [warden]
+	// dive = true
+	Pg struct {
+		SkipDelete bool `yaml:"skip.delete"`
+		// [warden]
+		// url = true
+		Url string `yaml:"url"`
+		// [warden]
+		// required = true
+		Publication string `yaml:"publication"`
+		// [warden]
+		// required = true
+		Slot string `yaml:"slot"`
+		// [warden]
+		// non-empty = true
+		Tables []string `yaml:"tables"`
+		// [warden]
+		// default = "public.pipe_health"
+		HealthTable string `yaml:"health.table"`
 	} `yaml:"pg"`
-	Kafka   kafkapipe.ProducerConfig `yaml:"kafka"`
-	Storage *badger.DB               `yaml:"-"`
+	// [warden]
+	// dive = true
+	Kafka kafkapipe.ProducerConfig `yaml:"kafka"`
+	// [warden]
+	// required = true
+	DB *badger.DB `yaml:"-"`
 }
 
 type SnapshotConfig struct {
+	// [warden]
+	// dive = true
 	Pg struct {
-		Url       string   `yaml:"url" validate:"url"`
-		Tables    []string `yaml:"tables" validate:"min=1"`
+		// [warden]
+		// url = true
+		Url string `yaml:"url"`
+		// [warden]
+		// non-empty = true
+		Tables    []string `yaml:"tables"`
 		Condition string   `yaml:"condition"`
 	} `yaml:"pg"`
+	// [warden]
+	// dive = true
 	Kafka kafkapipe.ProducerConfig `yaml:"kafka"`
 }
