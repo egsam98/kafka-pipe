@@ -1,6 +1,6 @@
 ![](/static/icon.png)
 # Overview
-The project is highly inspired by Kafka Connect, but implemented with Go.
+A Kafka Connect and Debezium inspired tool for data transfer implemented with Go.
 The project contains several connector classes designed for Change-Data-Capture (CDC) pipeline from specific source to sink. 
 Some of them use internal storage based on Badger embedded database to keep offsets/log positions/other important metadata to prevent
 from data loss or duplication on connection issues. Internal storage is organized in "data" folder in a workspace of running app.
