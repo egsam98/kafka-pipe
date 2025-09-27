@@ -1,6 +1,0 @@
-.idea/
-*.yaml
-*.yml
-Dockerfile
-Makefile
-data/
