@@ -12,6 +12,8 @@ defmodule KafkaPipe.Connector.Source.Postgres.Config do
     field :username, :string,  null: false, default: "postgres"
     field :password, :string, null: false, default: "postgres"
     field :tables, {:array, :string}, null: false
+    field :publication, :string, null: false, default: "kafka_pipe"
+    field :slot, :string, null: false, default: "kafka_pipe"
   end
 
   @spec changeset(Ecto.Schema.t(), map()) :: Ecto.Changeset.t()
