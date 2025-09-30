@@ -21,22 +21,30 @@ defmodule KafkaPipe.Connector.Source.Postgres.Internal do
     field :config, Config.t(), enforce: true
   end
 
-  @spec start_link(Lsn.t(), [Postgres.start_opt()]) :: {:ok, pid()} | {:error, Postgrex.Error.t() | any()}
-  def start_link(commit_lsn, opts) do
+  @unix_epoch ~N[1970-01-01 00:00:00]
+
+  @type start_opt :: Postgres.start_opt() | {:start_lsn, Lsn.t()}
+
+  @spec start_link([start_opt()]) :: {:ok, pid()} | {:error, Postgrex.Error.t() | any()}
+  def start_link(opts) do
     pg_opts = opts
       |> Keyword.fetch!(:config)
       |> Map.from_struct()
       |> Keyword.new()
-    Postgrex.ReplicationConnection.start_link(__MODULE__, {commit_lsn, opts}, pg_opts)
+    Postgrex.ReplicationConnection.start_link(__MODULE__, opts, pg_opts)
   end
 
   @spec commit_lsn(pid(), Lsn.t()) :: :ok
   def commit_lsn(pid, lsn), do: GenServer.call(pid, {:commit_lsn, lsn})
 
   @impl true
-  def init({commit_lsn, opts}) do
-    Logger.metadata(name: Keyword.fetch!(opts, :name))
-    {:ok, %State{config: Keyword.fetch!(opts, :config), commit_lsn: commit_lsn}}
+  def init(opts) do
+    Process.flag(:trap_exit, true)
+    name = Keyword.fetch!(opts, :name)
+    start_lsn = Keyword.fetch!(opts, :start_lsn)
+    cfg = Keyword.fetch!(opts, :config)
+    Logger.metadata(name: name)
+    {:ok, %State{config: cfg, commit_lsn: start_lsn}}
   end
 
   @impl true
@@ -76,12 +84,12 @@ defmodule KafkaPipe.Connector.Source.Postgres.Internal do
   @impl true
   def handle_call({:commit_lsn, commit_lsn}, from, state) do
     GenServer.reply(from, :ok)
-    {:noreply, %{state | commit_lsn: commit_lsn}}
+    {:noreply, %State{state | commit_lsn: commit_lsn}}
   end
 
   defp create_slot(%State{config: %Config{slot: slot}} = state) do
     query = "CREATE_REPLICATION_SLOT #{slot} LOGICAL pgoutput"
-    {:query, query, %{state | step: :create_slot}}
+    {:query, query, %State{state | step: :create_slot}}
   end
 
   defp start_replication(%State{commit_lsn: commit_lsn, config: %Config{slot: slot, publication: pub}} = state) do
@@ -137,7 +145,7 @@ defmodule KafkaPipe.Connector.Source.Postgres.Internal do
   @spec push_data(pos_integer(), Lsn.t(), [any()], DateTime.t(), pid(), State.t()) :: :ok
   defp push_data(rel_id, lsn, row, clock, pg_source,
     %State{
-      config: %Config{hostname: hostname, port: port, database: database},
+      config: %Config{hostname: hostname, port: port, database: database, timestamp_format: ts_format},
       relations: relations
     }
   ) do
@@ -146,7 +154,7 @@ defmodule KafkaPipe.Connector.Source.Postgres.Internal do
     {key, value} = [columns, row]
       |> Enum.zip()
       |> Enum.reduce({%{}, %{}}, fn {column(name: column, type: type, flags: flags), raw_data}, {key, value} ->
-        data = Postgrex.PgOutput.decode_value(raw_data, type)
+        data = decode(raw_data, type, ts_format)
         key = if Enum.member?(flags, :key), do: Map.put(key, column, data), else: key
         value = Map.put(value, column, data)
         {key, value}
@@ -169,4 +177,15 @@ defmodule KafkaPipe.Connector.Source.Postgres.Internal do
     }
     Postgres.push(pg_source, message)
   end
+
+  @spec decode(any(), String.t(), atom()) :: String.t() | pos_integer()
+  defp decode(value, "timestamp", :rfc3339), do: value
+
+  defp decode(value, "timestamp", ts_format) when ts_format in [:second, :millisecond] do
+    value
+    |> NaiveDateTime.from_iso8601!()
+    |> NaiveDateTime.diff(@unix_epoch, ts_format)
+  end
+
+  defp decode(value, type, _), do: Postgrex.PgOutput.decode_value(value, type)
 end

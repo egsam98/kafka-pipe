@@ -14,12 +14,13 @@ defmodule KafkaPipe.Connector.Source.Postgres.Config do
     field :tables, {:array, :string}, null: false
     field :publication, :string, null: false, default: "kafka_pipe"
     field :slot, :string, null: false, default: "kafka_pipe"
+    field :timestamp_format, Ecto.Enum, values: [:millisecond, :second, :rfc3339], null: false, default: :millisecond
   end
 
   @spec changeset(Ecto.Schema.t(), map()) :: Ecto.Changeset.t()
   def changeset(t, params) do
     fields = __MODULE__.__schema__(:fields)
-    cast(t, params, fields)
+    cast(t, params, fields, empty_values: [nil | empty_values()])
     |> validate_required(fields)
     |> validate_number(:port, greater_than: 0)
     |> validate_length(:tables, min: 1)

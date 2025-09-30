@@ -3,8 +3,8 @@ defmodule KafkaPipe.Connector.Message do
 
   typedstruct do
     field :topic, String.t()
-    field :key, binary()
-    field :value, binary()
+    field :key, iodata()
+    field :value, iodata()
     field :from, pid(), enforce: true
     field :metadata, map()
   end

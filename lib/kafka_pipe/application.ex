@@ -7,19 +7,17 @@ defmodule KafkaPipe.Application do
 
   @impl true
   def start(_type, _args) do
-    children = [
-      KafkaPipe.Connector.Supervisor,
-      KafkaPipeWeb.Telemetry,
-      {DNSCluster, query: Application.get_env(:kafka_pipe, :dns_cluster_query) || :ignore},
-      {Phoenix.PubSub, name: KafkaPipe.PubSub},
-      # Start to serve requests, typically the last entry
-      KafkaPipeWeb.Endpoint
-    ]
+    children = if Mix.env() == :test,
+      do: [],
+      else: [
+        KafkaPipe.Connector.Supervisor,
+        KafkaPipeWeb.Telemetry,
+        {DNSCluster, query: Application.get_env(:kafka_pipe, :dns_cluster_query) || :ignore},
+        {Phoenix.PubSub, name: KafkaPipe.PubSub},
+        KafkaPipeWeb.Endpoint
+      ]
 
-    # See https://hexdocs.pm/elixir/Supervisor.html
-    # for other strategies and supported options
-    opts = [strategy: :one_for_one, name: KafkaPipe.Supervisor]
-    Supervisor.start_link(children, opts)
+    Supervisor.start_link(children, strategy: :one_for_one, name: KafkaPipe.Supervisor)
   end
 
   # Tell Phoenix to update the endpoint configuration

@@ -44,7 +44,7 @@ defmodule KafkaPipe.Connector.Source.Postgres do
       [commit_lsn] -> commit_lsn
     end
 
-    case Internal.start_link(commit_lsn, name: :"#{name}.pgrepl", config: cfg) do
+    case Internal.start_link(name: :"#{name}.pgrepl", config: cfg, start_lsn: commit_lsn) do
       {:ok, pid} -> {:producer, %State{name: name, internal: pid}, buffer_size: :infinity}
       {:error, reason} -> {:stop, {:start, reason}}
     end
@@ -67,7 +67,7 @@ defmodule KafkaPipe.Connector.Source.Postgres do
     %Message{metadata: %{lsn: lsn}} = List.last(messages)
     MemberDB.put(name, :commit_lsn, lsn)
     Internal.commit_lsn(internal, lsn)
-    {:reply, :ok, [], %{state | buffer: buffer -- messages}} # TODO test
+    {:reply, :ok, [], %{state | buffer: buffer -- messages}}
   end
 
   @impl true

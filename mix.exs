@@ -73,7 +73,10 @@ defmodule KafkaPipe.MixProject do
       {:tarams, "~> 1.8.0"},
       {:parent, "~> 0.12.1"},
       {:yaml_elixir, "~> 2.12.0"},
-      {:dialyxir, "~> 1.4", only: [:dev], runtime: false}
+      {:dialyxir, "~> 1.4", only: :dev, runtime: false},
+      {:mimic, "~> 2.1.1", only: :test},
+      {:benchee, "~> 1.0", only: :test},
+      {:testcontainers, "~> 1.13.3", only: :test}
     ]
   end
 
@@ -86,7 +89,6 @@ defmodule KafkaPipe.MixProject do
   defp aliases do
     [
       setup: ["deps.get", "assets.setup", "assets.build"],
-      test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
       "assets.setup": ["tailwind.install --if-missing", "esbuild.install --if-missing"],
       "assets.build": ["compile", "tailwind kafka_pipe", "esbuild kafka_pipe"],
       "assets.deploy": [

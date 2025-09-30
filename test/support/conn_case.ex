@@ -31,8 +31,7 @@ defmodule KafkaPipeWeb.ConnCase do
     end
   end
 
-  setup tags do
-    KafkaPipe.DataCase.setup_sandbox(tags)
+  setup do
     {:ok, conn: Phoenix.ConnTest.build_conn()}
   end
 end

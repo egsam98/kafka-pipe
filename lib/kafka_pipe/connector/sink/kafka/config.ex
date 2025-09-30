@@ -15,7 +15,6 @@ defmodule KafkaPipe.Connector.Sink.Kafka.Config do
       field :configs, :map, default: %{}
     end
 
-    # @spec changeset(t(), map()) :: Ecto.Changeset.t()
     def changeset(t, params), do:
       cast(t, params, __MODULE__.__schema__(:fields))
       |> validate_required([:name])
@@ -33,7 +32,7 @@ defmodule KafkaPipe.Connector.Sink.Kafka.Config do
 
   @spec changeset(Ecto.Schema.t(), map()) :: Ecto.Changeset.t()
   def changeset(t, params) do
-    cast(t, params, [:endpoints, :batch_size, :batch_timeout])
+    cast(t, params, [:endpoints, :batch_size, :batch_timeout], empty_values: [nil | empty_values()])
     |> validate_required([:endpoints, :batch_size, :batch_timeout])
     |> validate_length(:endpoints, min: 1)
     |> validate_change(:endpoints, fn _, endpoints ->
