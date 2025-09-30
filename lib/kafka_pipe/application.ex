@@ -7,7 +7,7 @@ defmodule KafkaPipe.Application do
 
   @impl true
   def start(_type, _args) do
-    children = if Mix.env() == :test,
+    children = if KafkaPipe.test?(),
       do: [],
       else: [
         KafkaPipe.Connector.Supervisor,

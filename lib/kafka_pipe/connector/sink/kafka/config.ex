@@ -16,15 +16,15 @@ defmodule KafkaPipe.Connector.Sink.Kafka.Config do
     end
 
     def changeset(t, params), do:
-      cast(t, params, __MODULE__.__schema__(:fields))
+      cast(t, params, __MODULE__.__schema__(:fields), empty_values: [nil | empty_values()])
       |> validate_required([:name])
       |> validate_number(:num_partitions, greater_than: 0)
       |> validate_number(:replication_factor, greater_than: 0)
   end
 
   @primary_key false
-  typed_embedded_schema do
-    field :endpoints, {:array, :string}, null: false
+  typed_embedded_schema null: false do
+    field :endpoints, {:array, :string}
     field(:batch_size, :integer, default: 10_000) :: pos_integer()
     field(:batch_timeout, :integer, default: 5_000) :: pos_integer()
     embeds_many :topics, Topic

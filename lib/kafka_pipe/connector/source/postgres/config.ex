@@ -4,17 +4,21 @@ defmodule KafkaPipe.Connector.Source.Postgres.Config do
 
   import Ecto.Changeset
 
+  @timestamp_formats ~w(millisecond second rfc3339)a
+
+  @type timestamp_format :: unquote(Enum.reduce(@timestamp_formats, &{:|, [], [&1, &2]}))
+
   @primary_key false
-  typed_embedded_schema do
-    field :hostname, :string, null: false, default: "localhost"
+  typed_embedded_schema null: false do
+    field :hostname, :string, default: "localhost"
     field(:port, :integer, default: 5432) :: pos_integer()
-    field :database, :string, null: false, default: "postgres"
-    field :username, :string,  null: false, default: "postgres"
-    field :password, :string, null: false, default: "postgres"
-    field :tables, {:array, :string}, null: false
-    field :publication, :string, null: false, default: "kafka_pipe"
-    field :slot, :string, null: false, default: "kafka_pipe"
-    field :timestamp_format, Ecto.Enum, values: [:millisecond, :second, :rfc3339], null: false, default: :millisecond
+    field :database, :string, default: "postgres"
+    field :username, :string, default: "postgres"
+    field :password, :string, default: "postgres"
+    field :tables, {:array, :string}
+    field :publication, :string, default: "kafka_pipe"
+    field :slot, :string, default: "kafka_pipe"
+    field(:timestamp_format, Ecto.Enum, values: @timestamp_formats, null: false, default: :millisecond) :: timestamp_format()
   end
 
   @spec changeset(Ecto.Schema.t(), map()) :: Ecto.Changeset.t()

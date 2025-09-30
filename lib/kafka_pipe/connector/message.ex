@@ -5,7 +5,7 @@ defmodule KafkaPipe.Connector.Message do
     field :topic, String.t()
     field :key, iodata()
     field :value, iodata()
-    field :from, pid(), enforce: true
+    field :from, pid(), enforce: true # TODO rm
     field :metadata, map()
   end
 end

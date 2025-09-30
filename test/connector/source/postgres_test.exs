@@ -53,13 +53,13 @@ defmodule Test.Connector.Source.Postgres do
     assert messages == [1, 2, 3]
   end
 
-  test "handle push" do
+  test "handle_cast(:push)/2" do
     state = %State{internal: nil, name: nil, buffer: msgs([2, 1])}
     assert {:noreply, [], %State{buffer: buffer}} = Postgres.handle_cast({:push, msg(3)}, state)
     assert buffer == msgs([3, 2, 1])
   end
 
-  test "handle ack" do
+  test "handle_call(:ack)/3" do
     name = rand(:atom)
     self = self()
     state = %State{internal: self, name: name, buffer: msgs([3, 2, 1])}

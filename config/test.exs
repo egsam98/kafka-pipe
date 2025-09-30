@@ -1,5 +1,7 @@
 import Config
 
+config :kafka_pipe, test?: true
+
 # Configure your database
 #
 # The MIX_TEST_PARTITION environment variable can be used

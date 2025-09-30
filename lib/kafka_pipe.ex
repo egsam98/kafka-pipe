@@ -9,11 +9,14 @@ defmodule KafkaPipe do
 
   import Logger.Formatter
 
-  @spec connector_dir() :: String.t()
-  def connector_dir, do: Application.fetch_env!(:kafka_pipe, :connector_dir)
-
   @spec version() :: String.t()
   def version, do: Application.spec(:kafka_pipe, :vsn) || ""
+
+  @spec test?() :: boolean()
+  def test?, do: Application.get_env(:kafka_pipe, :test?, false)
+
+  @spec connector_dir() :: String.t()
+  def connector_dir, do: Application.fetch_env!(:kafka_pipe, :connector_dir)
 
   @spec modules() :: [module()]
   def modules, do: Application.spec(:kafka_pipe, :modules) || []

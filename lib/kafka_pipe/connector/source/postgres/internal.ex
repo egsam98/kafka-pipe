@@ -178,7 +178,7 @@ defmodule KafkaPipe.Connector.Source.Postgres.Internal do
     Postgres.push(pg_source, message)
   end
 
-  @spec decode(any(), String.t(), atom()) :: String.t() | pos_integer()
+  @spec decode(any(), String.t(), Config.timestamp_format()) :: String.t() | pos_integer()
   defp decode(value, "timestamp", :rfc3339), do: value
 
   defp decode(value, "timestamp", ts_format) when ts_format in [:second, :millisecond] do
