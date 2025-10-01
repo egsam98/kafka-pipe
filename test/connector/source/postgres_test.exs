@@ -83,10 +83,10 @@ defmodule Test.Connector.Source.Postgres do
 
   # Simplify messages assert by offsets in metadata
   defp msgs(offsets), do: Enum.map(offsets, fn offset ->
-    %Message{from: self(), metadata: %{lsn: %Lsn{file: 0, offset: offset}}}
+    %Message{metadata: %{lsn: %Lsn{file: 0, offset: offset}}}
   end)
 
-  defp msg(offset), do: %Message{from: self(), metadata: %{lsn: %Lsn{file: 0, offset: offset}}}
+  defp msg(offset), do: %Message{metadata: %{lsn: %Lsn{file: 0, offset: offset}}}
 end
 
 defmodule Test.Connector.Source.Postgres.Config do
@@ -109,7 +109,7 @@ defmodule Test.Connector.Source.Postgres.Config do
   end
 
   test "blank fields" do
-    for value <- [nil, "", " "] do
+    for value <- [nil, " "] do
       data = :fields
         |> Config.__schema__()
         |> Enum.map(& {&1, value})
@@ -185,7 +185,10 @@ defmodule Test.Connector.Source.Postgres.Internal do
       end,
       &Function.identity/1)
       |> Enum.to_list()
+
     assert length(messages) > length(names), "System messages must be pushed as well"
+    refute Enum.any?(messages, fn %Message{key: key, value: value}-> is_nil(key) || is_nil(value) end),
+      "All messages must have key and value filled"
 
     messages = messages
       |> Stream.reject(&is_nil(&1.topic))
@@ -199,7 +202,6 @@ defmodule Test.Connector.Source.Postgres.Internal do
         topic: "public.test",
         key: key,
         value: value,
-        from: from,
         metadata: %{
           port: port,
           version: @version,
@@ -211,7 +213,6 @@ defmodule Test.Connector.Source.Postgres.Internal do
         }
       } = msg
 
-      assert from == self()
       assert %Config{port: ^port, hostname: ^hostname, database: ^database} = cfg
       assert IO.iodata_to_binary(key) == ~s({"id":1})
       assert IO.iodata_to_binary(value) == ~s({"id":1,"name":"#{Enum.at(names, i)}"})

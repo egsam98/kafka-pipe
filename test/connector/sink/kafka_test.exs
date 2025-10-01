@@ -76,11 +76,10 @@ defmodule Test.Connector.Sink.Kafka do
 
   describe "handle_events/3" do
     setup do
-      self = self()
-      timer = Process.send_after(self, :ok, 100_000)
+      timer = Process.send_after(self(), :ok, 100_000)
       msgs = [
-        %Message{topic: "topic1", from: self},
-        %Message{topic: "topic2", from: self}
+        %Message{topic: "topic1"},
+        %Message{topic: "topic2"}
       ]
 
       pid = spawn_link(fn ->
@@ -127,5 +126,96 @@ defmodule Test.Connector.Sink.Kafka do
     refute is_nil(timer)
     assert_receive {:"$gen_producer", _, {:ask, ^batch_size}}
     assert_receive :timeout
+  end
+end
+
+defmodule Test.Connector.Sink.Kafka.Config do
+  use ExUnit.Case, async: true
+
+  alias KafkaPipe.Connector.Sink.Kafka.Config
+
+  @endpoint "127.0.0.1:29092"
+
+  test "ok" do
+    assert {:ok, %Config{
+      endpoints: [@endpoint],
+      batch_size: 10_000,
+      batch_timeout: 5_000,
+      topics: [
+        %Config.Topic{
+          name: "test",
+          num_partitions: 1,
+          replication_factor: 1,
+          configs: %{}
+        }
+      ]
+    }} == Config.new(%{endpoints: [@endpoint], topics: [%{name: "test"}]})
+  end
+
+  test "blank fields" do
+    for value <- [nil, " "] do
+      data = :fields
+        |> Config.__schema__()
+        |> Enum.map(& {&1, value})
+        |> Map.new()
+      assert {:error, %{endpoints: ["can't be blank"], topics: ["is invalid"]}} == Config.new(data)
+    end
+  end
+
+  test "blank endpoints" do
+    for endpoints <- [[], [nil], [" "]] do
+      assert {:error, %{endpoints: ["should have at least 1 item(s)"]}} == Config.new(%{endpoints: endpoints})
+    end
+  end
+
+  test "invalid endpoint" do
+    assert {:error, %{endpoints: ["must match {hostname}:{port} format"]}} == Config.new(%{endpoints: ["9092"]})
+  end
+
+  test "batch size == 0" do
+    assert {:error, %{batch_size: ["must be greater than 0"]}} == Config.new(%{
+      endpoints: [@endpoint],
+      batch_size: 0
+    })
+  end
+
+  test "batch timeout == 0" do
+    assert {:error, %{batch_timeout: ["must be greater than 0"]}} == Config.new(%{
+      endpoints: [@endpoint],
+      batch_timeout: 0
+    })
+  end
+end
+
+defmodule Test.Connector.Sink.Kafka.Config.Topic do
+  use ExUnit.Case, async: true
+
+  alias KafkaPipe.Connector.Sink.Kafka.Config.Topic
+
+  test "blank name" do
+    for value <- [nil, " "] do
+      data = :fields
+        |> Topic.__schema__()
+        |> Enum.map(& {&1, value})
+        |> Map.new()
+      errors = %Topic{}
+        |> Topic.changeset(data)
+        |> Ectox.Changeset.errors()
+      assert %{name: ["can't be blank"]} == errors
+    end
+  end
+
+  test "num partitions == 0" do
+    errors = %Topic{}
+      |> Topic.changeset(%{name: "test", num_partitions: 0})
+      |> Ectox.Changeset.errors()
+    assert %{num_partitions: ["must be greater than 0"]} == errors
+  end
+
+  test "replication factor == 0" do
+    errors = %Topic{}
+      |> Topic.changeset(%{name: "test", replication_factor: 0})
+      |> Ectox.Changeset.errors()
+    assert %{replication_factor: ["must be greater than 0"]} == errors
   end
 end

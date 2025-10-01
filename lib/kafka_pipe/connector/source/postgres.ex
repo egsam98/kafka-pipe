@@ -27,9 +27,6 @@ defmodule KafkaPipe.Connector.Source.Postgres do
   @spec push(pid(), Message.t()) :: :ok
   def push(pid, message), do: GenStage.cast(pid, {:push, message})
 
-  @spec push_stub(pid(), Lsn.t()) :: :ok
-  def push_stub(pid, lsn), do: GenStage.cast(pid, {:push, %Message{from: pid, metadata: %{lsn: lsn}}})
-
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)

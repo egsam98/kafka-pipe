@@ -1,8 +1,6 @@
 defmodule KafkaPipe.Connector.Source.Postgres.Config do
   use TypedEctoSchema
-  use KafkaPipe.Ecto.Ctor
-
-  import Ecto.Changeset
+  use Ectox.{Changeset, Ctor}
 
   @timestamp_formats ~w(millisecond second rfc3339)a
 
@@ -21,10 +19,10 @@ defmodule KafkaPipe.Connector.Source.Postgres.Config do
     field(:timestamp_format, Ecto.Enum, values: @timestamp_formats, null: false, default: :millisecond) :: timestamp_format()
   end
 
-  @spec changeset(Ecto.Schema.t(), map()) :: Ecto.Changeset.t()
+  @impl Ectox.Ctor
   def changeset(t, params) do
     fields = __MODULE__.__schema__(:fields)
-    cast(t, params, fields, empty_values: [nil | empty_values()])
+    cast(t, params, fields)
     |> validate_required(fields)
     |> validate_number(:port, greater_than: 0)
     |> validate_length(:tables, min: 1)

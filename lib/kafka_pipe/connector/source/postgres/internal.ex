@@ -102,7 +102,7 @@ defmodule KafkaPipe.Connector.Source.Postgres.Internal do
 
   defp handle_message(msg_primary_keep_alive(reply: 0, server_wal: wal), state) do
     {:parent, pg_source} = Process.info(self(), :parent)
-    Postgres.push_stub(pg_source, Lsn.from_tuple(wal))
+    push_stub(pg_source, Lsn.from_tuple(wal))
     {[], state}
   end
 
@@ -124,7 +124,7 @@ defmodule KafkaPipe.Connector.Source.Postgres.Internal do
 
     case data do
       msg_relation(id: rel_id, namespace: namespace, name: name, columns: columns) ->
-        Postgres.push_stub(pg_source, lsn)
+        push_stub(pg_source, lsn)
         relation = %Relation{namespace: namespace, name: name, columns: columns}
         {[], %{state | relations: Map.put(relations, rel_id, relation)}}
 
@@ -137,7 +137,7 @@ defmodule KafkaPipe.Connector.Source.Postgres.Internal do
         {[], state}
 
       _ ->
-        Postgres.push_stub(pg_source, lsn)
+        push_stub(pg_source, lsn)
         {[], state}
     end
   end
@@ -162,7 +162,6 @@ defmodule KafkaPipe.Connector.Source.Postgres.Internal do
 
     message = %Message{
       topic: rel_namespace <> "." <> rel_name,
-      from: pg_source,
       key: Jason.encode_to_iodata!(key),
       value: Jason.encode_to_iodata!(value),
       metadata: %{
@@ -177,6 +176,9 @@ defmodule KafkaPipe.Connector.Source.Postgres.Internal do
     }
     Postgres.push(pg_source, message)
   end
+
+  @spec push_stub(pid(), Lsn.t()) :: :ok
+  defp push_stub(pid, lsn), do: Postgres.push(pid, %Message{key: "", value: "", metadata: %{lsn: lsn}})
 
   @spec decode(any(), String.t(), Config.timestamp_format()) :: String.t() | pos_integer()
   defp decode(value, "timestamp", :rfc3339), do: value
