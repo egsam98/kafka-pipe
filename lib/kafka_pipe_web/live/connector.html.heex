@@ -21,27 +21,27 @@
 
     <div class="text-[2rem] mt-10">
       <span class="font-semibold text-balance">Connectors</span>
-      <.icon_button name="hero-plus-circle" phx-click={JS.dispatch("show", to: "#new-connector")} />
+      <.icon_button name="hero-plus-circle" phx-click="new" />
     </div>
 
-    <.modal id="new-connector">
+    <.modal :if={@form} id="new-connector">
       <h1 class="font-semibold">New connector</h1>
-      <form id="form" phx-submit="register" phx-change="validate">
-        <.input name="name" label="Name" value="" />
-        <div class="mb-4">
-          <.input type="select" name="source_module" label="Source" options={@source_modules} value="" />
-          <label for={@uploads.source_config.ref} phx-drop-target={@uploads.source_config.ref} >
-            <.live_file_input upload={@uploads.source_config} class="file-input" />
-          </label>
-        </div>
-        <div class="mb-4">
-          <.input type="select" name="sink_module" label="Sink" options={@sink_modules} value="" />
-          <label for={@uploads.sink_config.ref} phx-drop-target={@uploads.sink_config.ref}>
-            <.live_file_input upload={@uploads.sink_config} class="file-input" />
-          </label>
-        </div>
+      <.form for={@form} phx-change="validate" phx-submit="create">
+        <.input field={@form[:name]} label="Name" />
+        <.member_form 
+          id="source" 
+          field_module={@form[:source_module]}
+          field_config={@form[:source_config]}
+          modules={@source_modules} 
+          file={@uploads.source_config_file} />
+        <.member_form 
+          id="sink" 
+          field_module={@form[:sink_module]}
+          field_config={@form[:sink_config]}
+          modules={@sink_modules} 
+          file={@uploads.sink_config_file} />
         <.button class="btn btn-primary btn-soft w-full">Add</.button>
-      </form>
+      </.form>
     </.modal>
 
     <.table id="connectors" rows={@streams.connectors}>

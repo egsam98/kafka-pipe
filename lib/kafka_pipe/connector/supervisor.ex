@@ -30,10 +30,11 @@ defmodule KafkaPipe.Connector.Supervisor do
   def start_link(_args), do:
     Parent.GenServer.start_link(__MODULE__, nil, name: __MODULE__, max_restarts: :infinity)
 
-  @spec register(atom(), module(), Keyword.t(), module(), Keyword.t()) ::
-    {:ok, Conn.t()} | {:error, :exists | map() | any()}
-  def register(name, source_mod, source_opts, sink_mod, sink_opts) when is_atom(name), do:
-    GenServer.call(__MODULE__, {:register, name, source_mod, source_opts, sink_mod, sink_opts})
+  # TODO avoid using atoms for connector name
+  @spec register(atom(), module(), struct(), module(), struct()) ::
+    {:ok, Conn.t()} | {:error, :exists | any()}
+  def register(name, source_mod, source_cfg, sink_mod, sink_cfg) when is_atom(name), do:
+    GenServer.call(__MODULE__, {:register, name, source_mod, source_cfg, sink_mod, sink_cfg})
 
   @spec start_child(atom()) :: {:ok, Conn.t()} | :ignore | {:error, reason}
     when reason: :not_found | {:start, String.Chars.t() | any()} | {:already_started, pid()} | any()
@@ -84,20 +85,18 @@ defmodule KafkaPipe.Connector.Supervisor do
 
   @impl true
   def handle_call({:register, name, source_mod, source_cfg, sink_mod, sink_cfg}, _from, state) do
-    with {:ok, source_cfg} <- Module.safe_concat(source_mod, Config).new(source_cfg),
-      {:ok, sink_cfg} <- Module.safe_concat(sink_mod, Config).new(sink_cfg),
-      conn <- %Conn{
-        name: name,
-        source: %Conn.Member{mod: source_mod, config: source_cfg},
-        sink: %Conn.Member{mod: sink_mod, config: sink_cfg}
-      },
-      :ok <- persist_conn(name, conn)
-    do
-      Logger.info("Register connector \"#{name}\"")
-      {:reply, {:ok, conn}, Map.put(state, name, conn)}
-    else
-      {:error, reason} -> {:reply, {:error, reason}, state}
+    conn = %Conn{
+      name: name,
+      source: %Conn.Member{mod: source_mod, config: source_cfg},
+      sink: %Conn.Member{mod: sink_mod, config: sink_cfg}
+    }
+    {res, state} = case persist_conn(name, conn) do
+      :ok ->
+        Logger.info("Register connector \"#{name}\"")
+        {{:ok, conn}, Map.put(state, name, conn)}
+      {:error, reason} -> {{:error, reason}, state}
     end
+    {:reply, res, state}
   end
 
   @impl true

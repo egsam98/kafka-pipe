@@ -20,11 +20,11 @@ defmodule KafkaPipeWeb.Components do
   def modal(%{id: id} = assigns) do
     assigns = assign(assigns, :sel, "#" <> id)
     ~H"""
-    <dialog id={@id} class="modal" phx-hook="ModalHook" phx-mounted={JS.ignore_attributes(["open"])}>
-      <div class="modal-box" phx-click-away={JS.dispatch("phx:close", to: @sel)}>
+    <dialog id={@id} class="modal" phx-mounted={JS.set_attribute({"open", true})}>
+      <div class="modal-box" phx-click-away="cancel_new">
         <.icon_button name="hero-x-mark"
           class="btn btn-primary btn-soft btn-circle absolute right-2 top-2"
-          phx-click={JS.dispatch("phx:close", to: @sel)} />
+          phx-click="cancel_new" />
         {render_slot(@inner_block)}
       </div>
     </dialog>
@@ -40,6 +40,25 @@ defmodule KafkaPipeWeb.Components do
 
     ~H"""
     <span class="whitespace-pre">{inspect(@data, pretty: true, width: 0)}</span>
+    """
+  end
+
+  attr :id, :string, required: true
+  attr :field_module, Phoenix.HTML.FormField, required: true
+  attr :field_config, Phoenix.HTML.FormField, required: true
+  attr :modules, :list, required: true
+  attr :file, Phoenix.LiveView.UploadConfig, required: true
+  def member_form(%{id: id} = assigns) do
+    assigns = assign(assigns, ace_id: id <> "_ace", title: String.capitalize(id))
+    ~H"""
+    <div class="mb-3">
+      <.input field={@field_module} type="select" label={@title} options={@modules} />
+      <.input field={@field_config} type="textarea" class="hidden" label={@title <> " config"} phx-hook="AceInput" phx-ace-id={@ace_id} />
+      <div id={@ace_id} class="w-full mb-2 h-40" phx-update="ignore" />
+      <label for={@file.ref} phx-drop-target={@file.ref} >
+        <.live_file_input upload={@file} class="file-input" />
+      </label>
+    </div>
     """
   end
 end

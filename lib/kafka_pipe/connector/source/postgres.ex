@@ -31,7 +31,7 @@ defmodule KafkaPipe.Connector.Source.Postgres do
   def init(opts) do
     Process.flag(:trap_exit, true)
     name = Keyword.fetch!(opts, :name)
-    cfg = Keyword.fetch!(opts, :config)
+    cfg = %Config{} = Keyword.fetch!(opts, :config)
     Logger.metadata(name: name)
     Logger.info("Start")
 

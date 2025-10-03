@@ -25,17 +25,25 @@ import {LiveSocket} from "phoenix_live_view"
 import {hooks as colocatedHooks} from "phoenix-colocated/kafka_pipe"
 import topbar from "../vendor/topbar"
 
-const ModalHook = {
+const FlashHook = {
   mounted() {
-    this.el.addEventListener("show", () => this.el.showModal())
-    this.handleEvent("close", () => this.el.close())
+    setTimeout(() => liveSocket.execJS(this.el, this.el.getAttribute("phx-click")), 5000)
   }
 }
 
-const FlashHook = {
+const AceInput = {
   mounted() {
-    setTimeout(() =>
-      liveSocket.execJS(this.el, this.el.getAttribute("phx-click")), 5000)
+    const aceId = this.el.getAttribute("phx-ace-id")
+    const aceElem = document.getElementById(aceId)
+
+    this.editor = ace.edit(aceElem, {
+      theme: "ace/theme/merbivore_soft",
+      mode: "ace/mode/yaml"
+    })
+    this.editor.session.on("change", () => this.el.value = this.editor.getValue())
+  },
+  updated() {
+    this.editor.setValue(this.el.value)
   }
 }
 
@@ -43,7 +51,7 @@ const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute
 const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
   params: {_csrf_token: csrfToken},
-  hooks: {...colocatedHooks, ModalHook, FlashHook},
+  hooks: {...colocatedHooks, FlashHook, AceInput},
 })
 
 // Show progress bar on live navigation and form submits
