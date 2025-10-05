@@ -1,44 +1,48 @@
 defmodule KafkaPipe.Connector.Sink.Kafka do
-  use GenStage
+  @behaviour KafkaPipe.Connector.Sink
   use TypedStruct
 
-  require Logger
+  alias KafkaPipe.Connector.{Source, Sink, Message}
   alias __MODULE__.Config
-  alias KafkaPipe.Connector.Message
+  require Logger
 
   @retry_in 5_000
 
   typedstruct module: State do
     field :brod, pid(), enforce: true
-    field :batch_size, pos_integer(), enforce: true
-    field :batch_timeout, pos_integer(), enforce: true
-    field :source, GenStage.from()
-    field :timer, reference()
   end
 
-  @type start_opt() :: {:name, atom()}
-    | {:subscribe_to, [atom() | pid() | {GenServer.server(), GenStage.subscription_options()}]}
-    | {:config, Config.t()}
-
-  @spec start_link([start_opt()]) :: GenServer.on_start() | {:error, {:start, String.t()}}
-  def start_link(opts), do:
-    GenStage.start_link(__MODULE__, opts, name: Keyword.fetch!(opts, :name))
+  @spec start_link([Sink.start_opt()]) :: GenServer.on_start() | {:error, {:start, String.t()}}
+  def start_link(opts), do: Sink.start_link(__MODULE__, opts)
 
   @impl true
-  def init(opts) do
-    Process.flag(:trap_exit, true)
-    name = Keyword.fetch!(opts, :name)
-    subscribe_to = Keyword.fetch!(opts, :subscribe_to)
-    %Config{
-      topics: topics,
-      batch_timeout: batch_timeout,
-      batch_size: batch_size,
-      endpoints: endpoints,
-    } = Keyword.fetch!(opts, :config)
+  def init(name, cfg) do
+    case Config.new(cfg) do
+      {:ok, cfg} -> do_init(name, cfg)
+      {:error, errors} -> {:error, {:start, errors}}
+    end
+  end
 
-    Logger.metadata(name: name)
-    Logger.info("Start")
+  @impl true
+  def handle_messages(messages, source, %State{brod: brod} = state) do
+    payload = Enum.filter(messages, fn %Message{topic: topic} -> topic end)
+    results = payload
+      |> Enum.group_by(fn %Message{topic: topic} -> topic end)
+      |> Task.async_stream(fn {topic, messages} -> produce(topic, messages, brod) end, timeout: :infinity)
+      |> Enum.into([])
 
+    case Keyword.fetch(results, :exit) do
+      {:ok, {reason, _messages}} -> {:error, reason}
+      :error ->
+        n = length(payload)
+        if n > 0, do: Logger.info("Produced #{n} messages")
+
+        :ok = Source.ack(source, messages)
+        {:ok, state}
+    end
+  end
+
+  defp do_init(name, %Config{topics: topics, endpoints: endpoints, batch: batch}) do
     brod_endpoints = Enum.map(endpoints, fn endpoint ->
       [host, port] = String.split(endpoint, ":", parts: 2)
       {port, _} = Integer.parse(port)
@@ -48,7 +52,7 @@ defmodule KafkaPipe.Connector.Sink.Kafka do
     with :ok <- maybe_create_topics(brod_endpoints, topics),
       {:ok, pid} <- :brod.start_link_client(brod_endpoints, :"#{name}.brod", auto_start_producers: true)
     do
-      {:consumer, %State{brod: pid, batch_size: batch_size, batch_timeout: batch_timeout}, subscribe_to: subscribe_to}
+      {:ok, batch, %State{brod: pid}}
     else
       {:error, reason} ->
         msg = case reason do
@@ -57,57 +61,12 @@ defmodule KafkaPipe.Connector.Sink.Kafka do
           _ ->
             inspect(reason)
         end
-        {:stop, {:start, msg}}
+        {:error, {:start, msg}}
     end
   end
-
-  @impl true
-  def handle_subscribe(:producer, _opts, from, %State{batch_timeout: batch_timeout} = state) do
-    timer = Process.send_after(self(), :timeout, batch_timeout)
-    {:manual, %State{state | timer: timer, source: from}}
-  end
-
-  @impl true
-  def handle_events(messages, {source, _}, %State{brod: brod, batch_size: batch_size, timer: timer} = state) do
-    payload = Enum.filter(messages, fn %Message{topic: topic} -> topic end)
-    results = payload
-      |> Enum.group_by(fn %Message{topic: topic} -> topic end)
-      |> Task.async_stream(fn {topic, messages} -> produce(topic, messages, brod) end, timeout: :infinity)
-      |> Enum.into([])
-
-    case Keyword.fetch(results, :exit) do
-      {:ok, {reason, _messages}} ->
-        {:stop, reason, state}
-      :error ->
-        n = length(payload)
-        if n > 0, do: Logger.info("Produced #{n} messages")
-
-        :ok = GenStage.call(source, {:ack, messages}, :infinity)
-
-        state =
-          if length(messages) < batch_size do
-            state
-          else
-            if timer, do: Process.cancel_timer(timer)
-            send(self(), :timeout)
-            %State{state | timer: nil}
-          end
-        {:noreply, [], state}
-    end
-  end
-
-  @impl true
-  def handle_info(:timeout, %State{batch_size: batch_size, batch_timeout: batch_timeout, source: source} = state) do
-    GenStage.ask(source, batch_size)
-    timer = Process.send_after(self(), :timeout, batch_timeout)
-    {:noreply, [], %State{state | timer: timer}}
-  end
-
-  @impl true
-  def terminate(reason, _state), do: Logger.info("Stop #{inspect(reason)}")
 
   @spec produce(binary(), [Message.t()], pid()) :: :ok
-  def produce(topic, messages, brod) do
+  defp produce(topic, messages, brod) do
     brod_messages = Enum.map(messages, fn %Message{key: key, value: value, metadata: meta} ->
       headers = Enum.into(meta || %{}, [], fn {key, value} -> {to_string(key), to_string(value)} end)
       %{key: key, value: value, headers: headers}

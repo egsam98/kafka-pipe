@@ -13,7 +13,7 @@ defmodule KafkaPipeWeb.Live.Connector do
     connectors = Enum.map(Supervisor.connectors(), &conn_view/1)
     {:ok, socket
       |> assign(version: KafkaPipe.version(), form: nil)
-      |> stream_configure(:connectors, dom_id: fn %{name: name} -> Atom.to_string(name) end)
+      |> stream_configure(:connectors, dom_id: fn %{name: name} -> name end)
       |> stream(:connectors, connectors)}
   end
 
@@ -76,8 +76,6 @@ defmodule KafkaPipeWeb.Live.Connector do
 
   @impl true
   def handle_event("edit", %{"name" => name}, socket) do
-    name = String.to_existing_atom(name)
-
     socket = case Supervisor.connector(name) do
       nil -> put_flash(socket, :error, "Connector not found")
       %Supervisor.Conn{
@@ -144,7 +142,6 @@ defmodule KafkaPipeWeb.Live.Connector do
 
   @impl true
   def handle_event("start", %{"name" => name}, socket) do
-    name = String.to_existing_atom(name)
     socket = case Connector.Supervisor.start_child(name) do
       {:ok, conn} -> socket
         |> stream_insert(:connectors, conn_view(conn))
@@ -158,7 +155,6 @@ defmodule KafkaPipeWeb.Live.Connector do
 
   @impl true
   def handle_event("stop", %{"name" => name}, socket) do
-    name = String.to_existing_atom(name)
     socket = case Connector.Supervisor.stop_child(name) do
       {:ok, conn} -> socket
         |> stream_insert(:connectors, conn_view(conn))
@@ -171,10 +167,9 @@ defmodule KafkaPipeWeb.Live.Connector do
 
   @impl true
   def handle_event("delete", %{"name" => name}, socket) do
-    name = String.to_existing_atom(name)
     state = case Supervisor.delete_child(name) do
-      {:ok, %Conn{name: name}} -> socket
-        |> stream_delete_by_dom_id(:connectors, Atom.to_string(name))
+      {:ok, _conn} -> socket
+        |> stream_delete_by_dom_id(:connectors, name)
         |> put_flash(:info, "Connector has been deleted")
       {:error, :not_found} -> put_flash(socket, :error, "Connector not found")
       {:error, reason} -> put_flash(socket, :error, to_string(reason))
@@ -208,7 +203,7 @@ defmodule KafkaPipeWeb.Live.Connector do
     |> Map.update!(:sink, &member_view(name, &1))
   end
 
-  @spec member_view(atom(), Supervisor.Conn.Member.t()) :: map()
+  @spec member_view(String.t(), Supervisor.Conn.Member.t()) :: map()
   defp member_view(name, %Supervisor.Conn.Member{mod: mod} = member) do
     member
     |> Map.from_struct()

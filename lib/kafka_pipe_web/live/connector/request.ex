@@ -18,7 +18,7 @@ defmodule KafkaPipeWeb.Live.Connector.Request.Create do
 
   @primary_key false
   typed_embedded_schema null: false do
-    field(:name, :string) :: atom()
+    field :name, :string
     field(:source_module, Ectox.Module) :: module()
     field :source_config, :string
     field :_source_config, :map
@@ -34,7 +34,6 @@ defmodule KafkaPipeWeb.Live.Connector.Request.Create do
     |> validate_required(fields)
     |> decode_config(:source_config, :_source_config)
     |> decode_config(:sink_config, :_sink_config)
-    |> update_change(:name, &String.to_atom/1)
   end
 end
 
@@ -46,10 +45,10 @@ defmodule KafkaPipeWeb.Live.Connector.Request.Update do
 
   @primary_key false
   typed_embedded_schema null: false do
-    field(:name, :string) :: atom()
-    field(:source_config, :string)
+    field :name, :string
+    field :source_config, :string
     field :_source_config, :map
-    field(:sink_config, :string)
+    field :sink_config, :string
     field :_sink_config, :map
   end
 
@@ -60,6 +59,5 @@ defmodule KafkaPipeWeb.Live.Connector.Request.Update do
     |> validate_required(fields)
     |> decode_config(:source_config, :_source_config)
     |> decode_config(:sink_config, :_sink_config)
-    |> update_change(:name, &String.to_atom/1)
   end
 end

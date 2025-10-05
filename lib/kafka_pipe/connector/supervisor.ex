@@ -15,14 +15,14 @@ defmodule KafkaPipe.Connector.Supervisor do
     end
 
     typedstruct do
-      field :name, atom(), enforce: true
+      field :name, String.t(), enforce: true
       field :running?, boolean(), default: false
       field :source, Member.t(), enforce: true
       field :sink, Member.t(), enforce: true
     end
   end
 
-  @type state :: %{atom() => Conn.t()}
+  @type state :: %{String.t() => Conn.t()}
 
   @dir KafkaPipe.connector_dir()
   @restart_delay 3_000
@@ -31,35 +31,34 @@ defmodule KafkaPipe.Connector.Supervisor do
   def start_link(_args), do:
     Parent.GenServer.start_link(__MODULE__, nil, name: __MODULE__, max_restarts: :infinity)
 
-  # TODO avoid using atoms for connector name
-  @spec create(atom(), module(), map(), module(), map()) ::
+  @spec create(String.t(), module(), map(), module(), map()) ::
     {:ok, Conn.t()} | {:error, :exists | ConfigError.t() | any()}
   def create(name, source_mod, source_cfg, sink_mod, sink_cfg)
-    when is_atom(name) and is_map(source_cfg) and is_map(sink_cfg), do:
+    when is_binary(name) and is_map(source_cfg) and is_map(sink_cfg), do:
     GenServer.call(__MODULE__, {:create, name, source_mod, source_cfg, sink_mod, sink_cfg})
 
-  @spec update(atom(), map(), map()) :: {:ok, Conn.t()} | {:error, :not_found | ConfigError.t() | any()}
+  @spec update(String.t(), map(), map()) :: {:ok, Conn.t()} | {:error, :not_found | ConfigError.t() | any()}
   def update(name, source_cfg, sink_cfg)
-    when is_atom(name) and is_map(source_cfg) and is_map(sink_cfg),
+    when is_binary(name) and is_map(source_cfg) and is_map(sink_cfg),
     do: GenServer.call(__MODULE__, {:update, name, source_cfg, sink_cfg})
 
-  @spec start_child(atom()) :: {:ok, Conn.t()} | :ignore | {:error, reason}
+  @spec start_child(String.t()) :: {:ok, Conn.t()} | :ignore | {:error, reason}
     when reason: :not_found | Ecto.Changeset.t() | {:start, String.Chars.t() | any()} | {:already_started, pid()} | any()
-  def start_child(name) when is_atom(name), do: GenServer.call(__MODULE__, {:start_child, name})
+  def start_child(name) when is_binary(name), do: GenServer.call(__MODULE__, {:start_child, name})
 
-  @spec stop_child(atom()) :: {:ok, Conn.t()} | {:error, :not_found | String.t() | any()}
-  def stop_child(name) when is_atom(name), do: GenServer.call(__MODULE__, {:stop_child, name})
+  @spec stop_child(String.t()) :: {:ok, Conn.t()} | {:error, :not_found | String.t() | any()}
+  def stop_child(name) when is_binary(name), do: GenServer.call(__MODULE__, {:stop_child, name})
 
-  @spec delete_child(atom()) :: {:ok, Conn.t()} | {:error, :not_found | String.t() | any()}
-  def delete_child(name) when is_atom(name), do: GenServer.call(__MODULE__, {:delete_child, name})
+  @spec delete_child(String.t()) :: {:ok, Conn.t()} | {:error, :not_found | String.t() | any()}
+  def delete_child(name) when is_binary(name), do: GenServer.call(__MODULE__, {:delete_child, name})
 
   @spec connectors :: [Conn.t()]
   def connectors, do: GenServer.call(__MODULE__, :connectors)
 
-  @spec connector(atom()) :: Conn.t() | nil
-  def connector(name), do: GenServer.call(__MODULE__, {:connector, name})
+  @spec connector(String.t()) :: Conn.t() | nil
+  def connector(name) when is_binary(name), do: GenServer.call(__MODULE__, {:connector, name})
 
-  @spec member_pid(atom(), KafkaPipe.Connector.member()) :: pid() | nil
+  @spec member_pid(String.t(), KafkaPipe.Connector.member()) :: pid() | nil
   def member_pid(name, member) do
     case Parent.Client.child_pid(__MODULE__, :"#{name}.#{member}") do
       {:ok, pid} when is_pid(pid) -> pid
@@ -70,6 +69,7 @@ defmodule KafkaPipe.Connector.Supervisor do
   @impl true
   def init(nil) do
     Logger.metadata(name: __MODULE__)
+    Logger.info("Start connectors supervisor")
 
     File.mkdir_p!(@dir)
     state = @dir
@@ -137,10 +137,10 @@ defmodule KafkaPipe.Connector.Supervisor do
     ]
 
     {res, state} = case results do
-      [{:ok, _}, {:ok, _}] ->
+      [{:ok, source_cfg}, {:ok, sink_cfg}] ->
         conn = %Conn{conn |
-          source: %Conn.Member{source | config: source_cfg},
-          sink: %Conn.Member{sink | config: sink_cfg
+          source: %Conn.Member{source | config: Mapx.from_nested_struct(source_cfg)},
+          sink: %Conn.Member{sink | config: Mapx.from_nested_struct(sink_cfg)
         }}
 
         case persist_conn(name, conn) do
@@ -181,7 +181,7 @@ defmodule KafkaPipe.Connector.Supervisor do
     case maybe_stop do
       {{:ok, conn}, state} ->
         @dir
-        |> Path.join(Atom.to_string(name))
+        |> Path.join(name)
         |> then(& [&1, &1 <> ".source", &1 <> ".sink"])
         |> Enum.each(fn path ->
           with {:error, reason} when reason != :enoent <- File.rm(path) do
@@ -238,15 +238,12 @@ defmodule KafkaPipe.Connector.Supervisor do
   @impl true
   def terminate(_reason, _state),do: Parent.shutdown_all()
 
-  @spec do_start_child(atom(), state()) :: {result, state()} when result: {:ok, Conn.t()} | {:error, Ecto.Changeset.t() | any()}
+  @spec do_start_child(String.t(), state()) :: {result, state()} when result: {:ok, Conn.t()} | {:error, map() | any()}
   defp do_start_child(name, state) do
     %{^name => %Conn{
-      source: %Conn.Member{mod: source_mod, config: raw_source_cfg},
-      sink: %Conn.Member{mod: sink_mod, config: raw_sink_cfg},
+      source: %Conn.Member{mod: source_mod, config: source_cfg},
+      sink: %Conn.Member{mod: sink_mod, config: sink_cfg},
     } = conn} = state
-
-    source_cfg = Module.safe_concat(source_mod, Config).new!(raw_source_cfg)
-    sink_cfg = Module.safe_concat(sink_mod, Config).new!(raw_sink_cfg)
 
     source_name = :"#{name}.source"
     sink_name = :"#{name}.sink"
@@ -288,7 +285,7 @@ defmodule KafkaPipe.Connector.Supervisor do
     e in Ecto.InvalidChangesetError -> {{:error, e.changeset}, state}
   end
 
-  @spec do_stop_child(atom(), state()) :: {result, state()} when result: {:ok, Conn.t()} | {:error, String.t()}
+  @spec do_stop_child(String.t(), state()) :: {result, state()} when result: {:ok, Conn.t()} | {:error, String.t()}
   defp do_stop_child(name, state) do
     %{^name => conn} = state
 
@@ -305,10 +302,10 @@ defmodule KafkaPipe.Connector.Supervisor do
     end
   end
 
-  @spec persist_conn(atom(), Conn.t()) :: :ok | {:error, any()}
+  @spec persist_conn(String.t(), Conn.t()) :: :ok | {:error, any()}
   defp persist_conn(name, conn) do
     File.mkdir_p!(@dir)
-    path = Path.join(@dir, Atom.to_string(name))
+    path = Path.join(@dir, name)
 
     with {:ok, file} <- :dets.open_file(name, file: to_charlist(path)),
       :ok <- :dets.insert(file, [conn: Map.from_struct(conn)]),

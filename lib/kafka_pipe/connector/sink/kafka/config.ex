@@ -2,6 +2,8 @@ defmodule KafkaPipe.Connector.Sink.Kafka.Config do
   use TypedEctoSchema
   use Ectox.{Changeset, Ctor}
 
+  alias KafkaPipe.Connector.Sink.Batch
+
   defmodule Topic do
     use TypedEctoSchema
     use Ectox.Ctor
@@ -27,22 +29,20 @@ defmodule KafkaPipe.Connector.Sink.Kafka.Config do
   @primary_key false
   typed_embedded_schema null: false do
     field :endpoints, {:array, :string}
-    field(:batch_size, :integer, default: 10_000) :: pos_integer()
-    field(:batch_timeout, :integer, default: 5_000) :: pos_integer()
-    embeds_many :topics, Topic
+    embeds_one :batch, Batch, on_replace: :delete, defaults_to_struct: true
+    embeds_many :topics, Topic, on_replace: :delete
   end
 
   @impl Ectox.Ctor
   def changeset(t, params) do
-    fields = __MODULE__.__schema__(:fields) -- [:topics]
+    fields = __MODULE__.__schema__(:fields) -- [:topics, :batch]
     cast(t, params, fields)
     |> validate_required(fields)
     |> validate_length(:endpoints, min: 1)
     |> validate_list(:endpoints, [
       {&validate_format/4, [~r/^[^\:]+:\d{1,5}$/, [message: "must match {hostname}:{port} format"]]}
     ])
-    |> validate_number(:batch_size, greater_than: 0)
-    |> validate_number(:batch_timeout, greater_than: 0)
+    |> cast_embed(:batch)
     |> cast_embed(:topics)
   end
 end

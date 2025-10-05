@@ -23,15 +23,16 @@ defmodule KafkaPipe.Connector.Source.Postgres.Internal do
 
   @unix_epoch ~N[1970-01-01 00:00:00]
 
-  @type start_opt :: Postgres.start_opt() | {:start_lsn, Lsn.t()}
+  @type start_opt :: {:name, atom()} | {:config, Config.t()} | {:start_lsn, Lsn.t()}
 
   @spec start_link([start_opt()]) :: {:ok, pid()} | {:error, Postgrex.Error.t() | any()}
   def start_link(opts) do
+    name = Keyword.fetch!(opts, :name)
     pg_opts = opts
       |> Keyword.fetch!(:config)
       |> Map.from_struct()
       |> Keyword.new()
-    Postgrex.ReplicationConnection.start_link(__MODULE__, opts, pg_opts)
+    Postgrex.ReplicationConnection.start_link(__MODULE__, opts, pg_opts ++ [name: name])
   end
 
   @spec commit_lsn(pid(), Lsn.t()) :: :ok

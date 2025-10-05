@@ -1,11 +1,12 @@
 defmodule KafkaPipe.Connector.Source.Postgres do
-  use GenStage
+  @behaviour KafkaPipe.Connector.Source
   use TypedStruct
 
-  require Logger
+  alias KafkaPipe.Connector.Source
   alias KafkaPipe.Connector.{MemberDB, Message}
-  alias __MODULE__.{Config, Internal}
   alias KafkaPipe.Pg.Lsn
+  alias __MODULE__.{Config, Internal}
+  require Logger
 
   typedstruct module: State do
     field :name, atom(), enforce: true
@@ -13,37 +14,32 @@ defmodule KafkaPipe.Connector.Source.Postgres do
     field :buffer, [Message.t()], default: []
   end
 
-  @type start_opt :: {:name, atom()} | {:config, Config.t()}
-
-  @spec start_link([start_opt()]) :: GenServer.on_start() | {:error, {:start, reason}}
+  @spec start_link([Source.start_opt()]) :: GenServer.on_start() | {:error, {:start, reason}}
     when reason: Postgrex.Error.t() | any()
   def start_link(opts) do
-    name = Keyword.fetch!(opts, :name)
-    with {:error, %Postgrex.Error{} = error} <- GenStage.start_link(__MODULE__, opts, name: name) do
+    with {:error, %Postgrex.Error{} = error} <- Source.start_link(__MODULE__, opts) do
       {:error, {:start, error}}
     end
   end
 
   @spec push(pid(), Message.t()) :: :ok
-  def push(pid, message), do: GenStage.cast(pid, {:push, message})
+  def push(pid, message), do: Source.cast(pid, {:push, message})
 
   @impl true
-  def init(opts) do
-    Process.flag(:trap_exit, true)
-    name = Keyword.fetch!(opts, :name)
-    cfg = %Config{} = Keyword.fetch!(opts, :config)
-    Logger.metadata(name: name)
-    Logger.info("Start")
+  def init(name, cfg) do
+    case Config.new(cfg) do
+      {:ok, cfg} ->
+        MemberDB.open(name)
+        commit_lsn = case MemberDB.get(name, :commit_lsn) do
+          [] -> %Lsn{}
+          [commit_lsn] -> commit_lsn
+        end
 
-    MemberDB.open(name)
-    commit_lsn = case MemberDB.get(name, :commit_lsn) do
-      [] -> %Lsn{}
-      [commit_lsn] -> commit_lsn
-    end
-
-    case Internal.start_link(name: :"#{name}.pgrepl", config: cfg, start_lsn: commit_lsn) do
-      {:ok, pid} -> {:producer, %State{name: name, internal: pid}, buffer_size: :infinity}
-      {:error, reason} -> {:stop, {:start, reason}}
+        case Internal.start_link(name: :"#{name}.pgrepl", config: cfg, start_lsn: commit_lsn) do
+          {:ok, pid} -> {:ok, %State{name: name, internal: pid}}
+          {:error, reason} -> {:error, {:start, reason}}
+        end
+      {:error, errors} -> {:error, {:start, errors}}
     end
   end
 
@@ -52,7 +48,15 @@ defmodule KafkaPipe.Connector.Source.Postgres do
     messages = buffer
       |> Enum.take(-demand)
       |> Enum.reverse()
-    {:noreply, messages, state}
+    {:ok, messages, state}
+  end
+
+  @impl true
+  def handle_ack(messages, %State{name: name, buffer: buffer, internal: internal} = state) do
+    %Message{metadata: %{lsn: lsn}} = List.last(messages)
+    MemberDB.put(name, :commit_lsn, lsn)
+    Internal.commit_lsn(internal, lsn)
+    {:ok, %{state | buffer: buffer -- messages}}
   end
 
   @impl true
@@ -60,19 +64,8 @@ defmodule KafkaPipe.Connector.Source.Postgres do
     {:noreply, [], %{state | buffer: [msg | buffer]}}
 
   @impl true
-  def handle_call({:ack, messages}, _from, %State{name: name, buffer: buffer, internal: internal} = state) do
-    %Message{metadata: %{lsn: lsn}} = List.last(messages)
-    MemberDB.put(name, :commit_lsn, lsn)
-    Internal.commit_lsn(internal, lsn)
-    {:reply, :ok, [], %{state | buffer: buffer -- messages}}
-  end
-
-  @impl true
   def handle_info({:EXIT, internal, reason}, %State{internal: internal} = state), do: {:stop, reason, state}
 
   @impl true
-  def terminate(reason, %State{name: name}) do
-    MemberDB.close(name)
-    Logger.info("Stop #{inspect(reason)}")
-  end
+  def terminate(_reason, %State{name: name}), do: MemberDB.close(name)
 end

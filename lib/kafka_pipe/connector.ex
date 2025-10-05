@@ -1,16 +1,19 @@
 defmodule KafkaPipe.Connector do
+  @source_modules [
+    __MODULE__.Source.Postgres
+  ]
+
+  @sink_modules [
+    __MODULE__.Sink.Kafka
+  ]
+
   @type member() :: :source | :sink
 
   @spec modules(member()) :: [module()]
-  def modules(member) do
-    member_str = member
-      |> Atom.to_string()
-      |> String.capitalize()
-    KafkaPipe.modules()
-      |> Stream.map(& {&1, Module.split(&1)})
-      |> Stream.filter(fn {_, parts} -> Enum.at(parts, -2) == member_str end)
-      |> Enum.map(fn {mod, _} -> mod end)
-  end
+  def modules(:source), do: @source_modules
+
+  @spec modules(member()) :: [module()]
+  def modules(:sink), do: @sink_modules
 
   @spec humanize(module(), boolean()) :: String.t()
   def humanize(mod, keep_member \\ false) do
