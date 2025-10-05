@@ -28,12 +28,13 @@
       <h1 class="font-semibold">New connector</h1>
       <.form for={@form} phx-change="validate" phx-submit={@form.action}>
         <.input field={@form[:name]} label="Name" />
-        <div :for={{id, title, mod, cfg, modules, file} <- [
-          {"source", "Source", :source_module, :source_config, @source_modules, @uploads.source_config_file},
-          {"sink", "Sink", :sink_module, :sink_config, @sink_modules, @uploads.sink_config_file}
-        ]} class="mb-3">
-          <.input field={@form[mod]} type="select" label={title} options={modules} />
-          <.ace_input id={id} field={@form[cfg]} label={title <> " config"} file={file} />
+        <div class="mb-3">
+          <.input field={@form[:source_module]} type="select" label="Source" options={@source_modules} />
+          <.ace_input id="source" field={@form[:source_config]} label="Source config" file={@uploads.source_config_file} />
+        </div>
+        <div class="mb-3">
+          <.input field={@form[:sink_module]} type="select" label="Sink" options={@sink_modules} />
+          <.ace_input id="sink" field={@form[:sink_config]} label="Sink config" file={@uploads.sink_config_file} />
         </div>
         <.button class="btn btn-primary btn-soft w-full">Create</.button>
       </.form>
