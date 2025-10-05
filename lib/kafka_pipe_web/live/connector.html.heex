@@ -24,35 +24,46 @@
       <.icon_button name="hero-plus-circle" phx-click="new" />
     </div>
 
-    <.modal :if={@form} id="new-connector">
+    <.modal :if={@form && @form.action == :create}>
       <h1 class="font-semibold">New connector</h1>
-      <.form for={@form} phx-change="validate" phx-submit="create">
+      <.form for={@form} phx-change="validate" phx-submit={@form.action}>
         <.input field={@form[:name]} label="Name" />
-        <.member_form 
-          id="source" 
-          field_module={@form[:source_module]}
-          field_config={@form[:source_config]}
-          modules={@source_modules} 
-          file={@uploads.source_config_file} />
-        <.member_form 
-          id="sink" 
-          field_module={@form[:sink_module]}
-          field_config={@form[:sink_config]}
-          modules={@sink_modules} 
-          file={@uploads.sink_config_file} />
-        <.button class="btn btn-primary btn-soft w-full">Add</.button>
+        <div :for={{id, title, mod, cfg, modules, file} <- [
+          {"source", "Source", :source_module, :source_config, @source_modules, @uploads.source_config_file},
+          {"sink", "Sink", :sink_module, :sink_config, @sink_modules, @uploads.sink_config_file}
+        ]} class="mb-3">
+          <.input field={@form[mod]} type="select" label={title} options={modules} />
+          <.ace_input id={id} field={@form[cfg]} label={title <> " config"} file={file} />
+        </div>
+        <.button class="btn btn-primary btn-soft w-full">Create</.button>
+      </.form>
+    </.modal>
+
+    <.modal :if={@form && @form.action == :update}>
+      <h1 class="font-semibold">{~s(Edit connector "#{Form.input_value(@form, :name)}")}</h1>
+      <.form for={@form} phx-change="validate" phx-submit={@form.action}>
+        <.input field={@form[:name]} class="hidden" />
+        <div class="mb-3">
+          <.ace_input id="source_config" label="Source config" field={@form[:source_config]} 
+            file={@uploads.source_config_file} />
+        </div>
+        <div class="mb-3">
+          <.ace_input id="sink_config" label="Sink config" field={@form[:sink_config]} 
+            file={@uploads.sink_config_file} />
+        </div>
+        <.button class="btn btn-primary btn-soft w-full">Update</.button>
       </.form>
     </.modal>
 
     <.table id="connectors" rows={@streams.connectors}>
-      <:col :let={{_, c}} label="Name">{c.name}</:col>
+      <:col :let={{name, _}} label="Name">{name}</:col>
       <:col :let={{_, c}} label="Source">
         <.button disabled={!c.source.pid} href={if c.source.pid, do: ~p"/dashboard/processes?info=#{c.source.pid}"} target="_blank">
           {c.source.mod}
         </.button>
       </:col>
       <:col :let={{_, c}} label="Source Config">
-        <.secure_inspect data={c.source.config} />
+        <span class="whitespace-pre">{inspect(c.source.config, pretty: true, width: 0)}</span>
       </:col>
       <:col :let={{_, c}} label="Sink">
         <.button disabled={!c.sink.pid} href={if c.sink.pid, do: ~p"/dashboard/processes?info=#{c.sink.pid}"} target="_blank">
@@ -60,16 +71,19 @@
         </.button>
       </:col>
       <:col :let={{_, c}} label="Sink Config">
-        <.secure_inspect data={c.sink.config} />
+        <span class="whitespace-pre">{inspect(c.sink.config, pretty: true, width: 0)}</span>
       </:col>
 
-      <:action :let={{_, c}}>
+      <:action :let={{name, _}}>
+        <.icon_button name="hero-pencil-square" phx-click="edit" phx-value-name={name} />
+      </:action>
+      <:action :let={{name, c}}>
         <.icon_button name={if c.running?, do: "hero-stop", else: "hero-play"} 
           phx-click={if c.running?, do: "stop", else: "start"} 
-          phx-value-name={c.name} />
+          phx-value-name={name} />
       </:action>
-      <:action :let={{_, c}}>
-        <.icon_button name="hero-trash" phx-click="delete" phx-value-name={c.name} />
+      <:action :let={{name, _}}>
+        <.icon_button name="hero-trash" phx-click="delete" phx-value-name={name} />
       </:action>
     </.table>
 

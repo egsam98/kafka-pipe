@@ -2,6 +2,7 @@ defmodule KafkaPipe.Connector.Supervisor do
   use Parent.GenServer
   use TypedStruct
 
+  alias KafkaPipe.Connector.ConfigError
   import KafkaPipe.Connector
   require Logger
 
@@ -10,7 +11,7 @@ defmodule KafkaPipe.Connector.Supervisor do
 
     typedstruct module: Member do
       field :mod, module(), enforce: true
-      field :config, %{String.t() => any()}, enforce: true
+      field :config, %{atom() => any()}, enforce: true
     end
 
     typedstruct do
@@ -31,13 +32,19 @@ defmodule KafkaPipe.Connector.Supervisor do
     Parent.GenServer.start_link(__MODULE__, nil, name: __MODULE__, max_restarts: :infinity)
 
   # TODO avoid using atoms for connector name
-  @spec register(atom(), module(), struct(), module(), struct()) ::
-    {:ok, Conn.t()} | {:error, :exists | any()}
-  def register(name, source_mod, source_cfg, sink_mod, sink_cfg) when is_atom(name), do:
-    GenServer.call(__MODULE__, {:register, name, source_mod, source_cfg, sink_mod, sink_cfg})
+  @spec create(atom(), module(), map(), module(), map()) ::
+    {:ok, Conn.t()} | {:error, :exists | ConfigError.t() | any()}
+  def create(name, source_mod, source_cfg, sink_mod, sink_cfg)
+    when is_atom(name) and is_map(source_cfg) and is_map(sink_cfg), do:
+    GenServer.call(__MODULE__, {:create, name, source_mod, source_cfg, sink_mod, sink_cfg})
+
+  @spec update(atom(), map(), map()) :: {:ok, Conn.t()} | {:error, :not_found | ConfigError.t() | any()}
+  def update(name, source_cfg, sink_cfg)
+    when is_atom(name) and is_map(source_cfg) and is_map(sink_cfg),
+    do: GenServer.call(__MODULE__, {:update, name, source_cfg, sink_cfg})
 
   @spec start_child(atom()) :: {:ok, Conn.t()} | :ignore | {:error, reason}
-    when reason: :not_found | {:start, String.Chars.t() | any()} | {:already_started, pid()} | any()
+    when reason: :not_found | Ecto.Changeset.t() | {:start, String.Chars.t() | any()} | {:already_started, pid()} | any()
   def start_child(name) when is_atom(name), do: GenServer.call(__MODULE__, {:start_child, name})
 
   @spec stop_child(atom()) :: {:ok, Conn.t()} | {:error, :not_found | String.t() | any()}
@@ -48,6 +55,9 @@ defmodule KafkaPipe.Connector.Supervisor do
 
   @spec connectors :: [Conn.t()]
   def connectors, do: GenServer.call(__MODULE__, :connectors)
+
+  @spec connector(atom()) :: Conn.t() | nil
+  def connector(name), do: GenServer.call(__MODULE__, {:connector, name})
 
   @spec member_pid(atom(), KafkaPipe.Connector.member()) :: pid() | nil
   def member_pid(name, member) do
@@ -80,22 +90,73 @@ defmodule KafkaPipe.Connector.Supervisor do
   end
 
   @impl true
-  def handle_call({:register, name, _, _, _, _}, _from, state) when is_map_key(state, name), do:
+  def handle_call({:create, name, _, _, _, _}, _from, state) when is_map_key(state, name), do:
     {:reply, {:error, :exists}, state}
 
   @impl true
-  def handle_call({:register, name, source_mod, source_cfg, sink_mod, sink_cfg}, _from, state) do
-    conn = %Conn{
-      name: name,
-      source: %Conn.Member{mod: source_mod, config: source_cfg},
-      sink: %Conn.Member{mod: sink_mod, config: sink_cfg}
-    }
-    {res, state} = case persist_conn(name, conn) do
-      :ok ->
-        Logger.info("Register connector \"#{name}\"")
-        {{:ok, conn}, Map.put(state, name, conn)}
-      {:error, reason} -> {{:error, reason}, state}
+  def handle_call({:create, name, source_mod, source_cfg, sink_mod, sink_cfg}, _from, state) do
+    results = [
+      Module.safe_concat(source_mod, Config).new(source_cfg),
+      Module.safe_concat(sink_mod, Config).new(sink_cfg)
+    ]
+
+    {res, state} = case results do
+      [{:ok, _}, {:ok, _}] ->
+        conn = %Conn{
+          name: name,
+          source: %Conn.Member{mod: source_mod, config: source_cfg},
+          sink: %Conn.Member{mod: sink_mod, config: sink_cfg}
+        }
+        case persist_conn(name, conn) do
+          :ok ->
+            Logger.info("Register connector \"#{name}\"")
+            {{:ok, conn}, Map.put(state, name, conn)}
+          {:error, reason} -> {{:error, reason}, state}
+        end
+      _ ->
+        config_error = Enum.zip_reduce(results, [:source, :sink], %ConfigError{}, fn
+          {:error, details}, key, acc -> Map.put(acc, key, details)
+          {:ok, _}, _, acc -> acc
+        end)
+        {{:error, config_error}, state}
     end
+
+    {:reply, res, state}
+  end
+
+  @impl true
+  def handle_call({:update, name, source_cfg, sink_cfg}, _from, state) when is_map_key(state, name) do
+    %{^name => %Conn{
+      source: %Conn.Member{mod: source_mod} = source,
+      sink: %Conn.Member{mod: sink_mod} = sink
+    } = conn} = state
+
+    results = [
+      Module.safe_concat(source_mod, Config).new(source_cfg),
+      Module.safe_concat(sink_mod, Config).new(sink_cfg)
+    ]
+
+    {res, state} = case results do
+      [{:ok, _}, {:ok, _}] ->
+        conn = %Conn{conn |
+          source: %Conn.Member{source | config: source_cfg},
+          sink: %Conn.Member{sink | config: sink_cfg
+        }}
+
+        case persist_conn(name, conn) do
+          :ok ->
+            Logger.info("Update connector \"#{name}\"")
+            {{:ok, conn}, Map.put(state, name, conn)}
+          {:error, reason} -> {{:error, reason}, state}
+        end
+      _ ->
+        config_error = Enum.zip_reduce(results, [:source, :sink], %ConfigError{}, fn
+          {:error, details}, key, acc -> Map.put(acc, key, details)
+          {:ok, _}, _, acc -> acc
+        end)
+        {{:error, config_error}, state}
+    end
+
     {:reply, res, state}
   end
 
@@ -136,11 +197,14 @@ defmodule KafkaPipe.Connector.Supervisor do
   end
 
   @impl true
-  def handle_call(req, _from, state) when elem(req, 0) in [:start_child, :stop_child, :delete], do:
+  def handle_call(req, _from, state) when elem(req, 0) in [:update, :delete, :start_child, :stop_child], do:
     {:reply, {:error, :not_found}, state}
 
   @impl true
   def handle_call(:connectors, _from, state), do: {:reply, Map.values(state), state}
+
+  @impl true
+  def handle_call({:connector, name}, _from, state), do: {:reply, Map.get(state, name), state}
 
   @impl true
   def handle_info({:start_child, name}, state) do
@@ -174,12 +238,15 @@ defmodule KafkaPipe.Connector.Supervisor do
   @impl true
   def terminate(_reason, _state),do: Parent.shutdown_all()
 
-  @spec do_start_child(atom(), state()) :: {result, state()} when result: {:ok, Conn.t()} | {:error, any()}
+  @spec do_start_child(atom(), state()) :: {result, state()} when result: {:ok, Conn.t()} | {:error, Ecto.Changeset.t() | any()}
   defp do_start_child(name, state) do
     %{^name => %Conn{
-      source: %Conn.Member{mod: source_mod, config: source_cfg},
-      sink: %Conn.Member{mod: sink_mod, config: sink_cfg},
+      source: %Conn.Member{mod: source_mod, config: raw_source_cfg},
+      sink: %Conn.Member{mod: sink_mod, config: raw_sink_cfg},
     } = conn} = state
+
+    source_cfg = Module.safe_concat(source_mod, Config).new!(raw_source_cfg)
+    sink_cfg = Module.safe_concat(sink_mod, Config).new!(raw_sink_cfg)
 
     source_name = :"#{name}.source"
     sink_name = :"#{name}.sink"
@@ -217,6 +284,8 @@ defmodule KafkaPipe.Connector.Supervisor do
       res ->
         {res, state}
     end
+  rescue
+    e in Ecto.InvalidChangesetError -> {{:error, e.changeset}, state}
   end
 
   @spec do_stop_child(atom(), state()) :: {result, state()} when result: {:ok, Conn.t()} | {:error, String.t()}

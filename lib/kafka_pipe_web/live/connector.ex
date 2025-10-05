@@ -4,23 +4,24 @@ defmodule KafkaPipeWeb.Live.Connector do
   alias Phoenix.HTML.Form
   alias Phoenix.LiveView.Socket
   alias KafkaPipe.Connector
+  alias KafkaPipe.Connector.Supervisor
   alias KafkaPipe.Connector.Supervisor.Conn
-  alias KafkaPipeWeb.Live.Connector.NewConnector
+  alias KafkaPipeWeb.Live.Connector.{CreateRequest, UpdateRequest}
 
   @impl true
   def mount(_params, _session, socket) do
-    connectors = Enum.map(Connector.Supervisor.connectors(), &conn_view/1)
+    connectors = Enum.map(Supervisor.connectors(), &conn_view/1)
     {:ok, socket
       |> assign(version: KafkaPipe.version(), form: nil)
-      |> stream_configure(:connectors, dom_id: fn %Conn{name: name} -> Atom.to_string(name) end)
+      |> stream_configure(:connectors, dom_id: fn %{name: name} -> Atom.to_string(name) end)
       |> stream(:connectors, connectors)}
   end
 
   @impl true
   def handle_event("new", _params, socket) do
-    form = %NewConnector{}
+    form = %CreateRequest{}
       |> Ecto.Changeset.change()
-      |> to_form()
+      |> to_form(action: :create)
     source_mods = Connector.modules(:source)
       |> Enum.map(& {Connector.humanize(&1), &1})
     sink_mods = Connector.modules(:sink)
@@ -39,34 +40,97 @@ defmodule KafkaPipeWeb.Live.Connector do
   end
 
   @impl true
-  def handle_event("cancel_new", _params, socket), do: {:noreply, assign(socket, form: nil)}
-
-  @impl true
-  def handle_event("create", %{"new_connector" => new_conn_params}, socket) do
-    changeset = new_conn_params
-      |> NewConnector.changeset()
-      |> Map.put(:action, :create)
-    {changeset, source_cfg} = parse_config(changeset, :source_module, :source_config)
-    {changeset, sink_cfg} = parse_config(changeset, :sink_module, :sink_config)
+  def handle_event("create", %{"create_request" => req}, socket) do
+    changeset = CreateRequest.changeset(req)
+    {changeset, source_cfg} = decode_config(changeset, :source_config)
+    {changeset, sink_cfg} = decode_config(changeset, :sink_config)
 
     socket = case Ecto.Changeset.apply_action(changeset, :create) do
-      {:ok, %NewConnector{name: name, source_module: source_mod, sink_module: sink_mod}} ->
-        case Connector.Supervisor.register(name, source_mod, source_cfg, sink_mod, sink_cfg) do
+      {:ok, %CreateRequest{name: name, source_module: source_mod, sink_module: sink_mod}} ->
+        case Connector.Supervisor.create(name, source_mod, source_cfg, sink_mod, sink_cfg) do
           {:ok, conn} -> socket
             |> stream_insert(:connectors, conn_view(conn))
             |> assign(:form, nil)
           {:error, :exists} ->
             form = changeset
               |> Ecto.Changeset.add_error(:name, "Connector exists")
-              |> to_form()
+              |> to_form(action: :create)
+            assign(socket, form: form)
+          {:error, %Connector.ConfigError{source: source_errors, sink: sink_errors}} ->
+            form = changeset
+              |> changeset_add_errors(:source_config, source_errors)
+              |> changeset_add_errors(:sink_config, sink_errors)
+              |> to_form(action: :create)
             assign(socket, form: form)
         end
       {:error, changeset} ->
-        assign(socket, form: to_form(changeset))
+        assign(socket, form: to_form(changeset, action: :create))
     end
 
     {:noreply, socket}
   end
+
+  @impl true
+  def handle_event("edit", %{"name" => name}, socket) do
+    name = String.to_existing_atom(name)
+
+    socket = case Supervisor.connector(name) do
+      nil -> put_flash(socket, :error, "Connector not found")
+      %Supervisor.Conn{
+        source: %Conn.Member{config: source_cfg},
+        sink: %Conn.Member{config: sink_cfg}
+      } ->
+        form = %UpdateRequest{
+            name: name,
+            source_config: Yaml.encode(source_cfg),
+            sink_config: Yaml.encode(sink_cfg)
+          }
+          |> Ecto.Changeset.change()
+          |> to_form(action: :update)
+        upload_opts = [auto_upload: true, progress: &handle_file_upload/3, accept: ~w(.yaml .yml)]
+
+        socket
+        |> assign(form: form)
+        |> allow_upload(:source_config_file, upload_opts)
+        |> allow_upload(:sink_config_file, upload_opts)
+    end
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_event("update", %{"update_request" => req}, socket) do
+    changeset = UpdateRequest.changeset(req)
+    {changeset, source_cfg} = decode_config(changeset, :source_config)
+    {changeset, sink_cfg} = decode_config(changeset, :sink_config)
+
+    socket = case Ecto.Changeset.apply_action(changeset, :update) do
+      {:ok, %UpdateRequest{name: name}} ->
+        case Connector.Supervisor.update(name, source_cfg, sink_cfg) do
+          {:ok, conn} -> socket
+            |> stream_insert(:connectors, conn_view(conn))
+            |> assign(:form, nil)
+          {:error, :not_found} ->
+            form = changeset
+              |> Ecto.Changeset.add_error(:name, "Connector not found")
+              |> to_form(action: :update)
+            assign(socket, form: form)
+          {:error, %Connector.ConfigError{source: source_errors, sink: sink_errors}} ->
+            form = changeset
+              |> changeset_add_errors(:source_config, source_errors)
+              |> changeset_add_errors(:sink_config, sink_errors)
+              |> to_form(action: :update)
+            assign(socket, form: form)
+        end
+      {:error, changeset} ->
+        assign(socket, form: to_form(changeset, action: :update))
+    end
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_event("cancel_modal", _params, socket), do: {:noreply, assign(socket, form: nil)}
 
   # Required for file upload progress
   @impl true
@@ -102,7 +166,7 @@ defmodule KafkaPipeWeb.Live.Connector do
   @impl true
   def handle_event("delete", %{"name" => name}, socket) do
     name = String.to_existing_atom(name)
-    state = case Connector.Supervisor.delete_child(name) do
+    state = case Supervisor.delete_child(name) do
       {:ok, %Conn{name: name}} -> socket
         |> stream_delete_by_dom_id(:connectors, Atom.to_string(name))
         |> put_flash(:info, "Connector has been deleted")
@@ -114,7 +178,7 @@ defmodule KafkaPipeWeb.Live.Connector do
 
   @spec handle_file_upload(atom(), Phoenix.LiveView.UploadEntry.t(), Socket.t()) :: {:noreply, Socket.t()}
   defp handle_file_upload(name, entry, socket) when entry.done? do
-    %Socket{assigns: %{form: %Form{source: changeset}}} = socket
+    %Socket{assigns: %{form: %Form{source: changeset, action: action}}} = socket
 
     changeset = case consume_uploaded_entries(socket, name, fn %{path: path}, _ -> {:ok, File.read(path)} end) do
       [{:ok, raw}] ->
@@ -125,48 +189,42 @@ defmodule KafkaPipeWeb.Live.Connector do
         Ecto.Changeset.put_change(changeset, config_field, raw)
       [] -> Ecto.Changeset.add_error(changeset, name, "Failed to upload file")
     end
-    {:noreply, assign(socket, form: to_form(changeset))}
+    {:noreply, assign(socket, form: to_form(changeset, action: action))}
   end
 
   defp handle_file_upload(_name, _entry, socket), do: {:noreply, socket}
 
-  @spec parse_config(Ecto.Changeset.t(NewConnector.t()), atom(), atom()) :: {Ecto.Changeset.t(NewConnector.t()), struct() | nil}
-  defp parse_config(changeset, mod_field, cfg_field) do
-    mod_binary = Ecto.Changeset.get_change(changeset, mod_field)
-    cfg_binary = Ecto.Changeset.get_change(changeset, cfg_field)
-
-    with true <- mod_binary != nil and cfg_binary != nil,
-      {:ok, cfg_raw} <- YamlElixir.read_from_string(cfg_binary),
-      true <- is_map(cfg_raw) || {:error, "YAML map required"},
-      {:ok, cfg} <- Module.safe_concat(mod_binary, Config).new(cfg_raw)
-    do
-      {changeset, cfg}
-    else
-      false -> {changeset, nil}
-      {:error, %Ecto.Changeset{errors: errors}} ->
-        changeset = errors
-          |> Enum.reduce(changeset, fn {field, {msg, _opts}}, changeset ->
-            Ecto.Changeset.add_error(changeset, cfg_field, "#{field}: #{msg}")
-          end)
-        {changeset, nil}
-      {:error, reason} ->
-        msg = case reason do
-          %YamlElixir.ParsingError{message: msg} -> msg
-          reason when is_binary(reason) -> reason
-        end
-        {Ecto.Changeset.add_error(changeset, cfg_field, msg), nil}
+  defp decode_config(%Ecto.Changeset{changes: changes} = changeset, key) when is_map_key(changes, key) do
+    case Yaml.decode(changes[key]) do
+      {:ok, cfg} when is_map(cfg) -> {changeset, cfg}
+      {:ok, _} -> {Ecto.Changeset.add_error(changeset, key, "YAML map required"), nil}
+      {:error, %Yaml.ParsingError{message: msg}} -> {Ecto.Changeset.add_error(changeset, key, msg), nil}
     end
   end
 
-  @spec conn_view(Conn.t()) :: map()
-  defp conn_view(%Conn{name: name, source: source, sink: sink} = conn) do
-    %{conn | source: member_view(name, source), sink: member_view(name, sink)}
+  defp decode_config(changeset, _key), do: {changeset, nil}
+
+  @spec conn_view(Supervisor.Conn.t()) :: map()
+  defp conn_view(%Supervisor.Conn{name: name} = conn) do
+    conn
+    |> Map.from_struct()
+    |> Map.update!(:source, &member_view(name, &1))
+    |> Map.update!(:sink, &member_view(name, &1))
   end
 
-  @spec member_view(atom(), Conn.Member.t()) :: map()
-  defp member_view(name, %Conn.Member{mod: mod} = member) do
+  @spec member_view(atom(), Supervisor.Conn.Member.t()) :: map()
+  defp member_view(name, %Supervisor.Conn.Member{mod: mod} = member) do
     member
+    |> Map.from_struct()
     |> Map.put(:mod, Connector.humanize(mod))
     |> Map.put(:pid, Connector.Supervisor.member_pid(name, :source))
   end
+
+  defp changeset_add_errors(changeset, field, %{} = errors) do
+    Enum.reduce(errors, changeset, fn {error_field, msgs}, changeset ->
+      Ecto.Changeset.add_error(changeset, field, "#{error_field}: #{inspect(msgs)}")
+    end)
+  end
+
+  defp changeset_add_errors(changeset, _field, nil), do: changeset
 end

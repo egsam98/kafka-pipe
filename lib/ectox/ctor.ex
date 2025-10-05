@@ -13,10 +13,18 @@ defmodule Ectox.Ctor do
     defmacro __before_compile__(_env) do
       quote do
 
-        @spec new(map()) :: {:ok, __MODULE__.t()} | {:error, Ecto.Changeset.t()}
+        @spec new(map()) :: {:ok, __MODULE__.t()} | {:error, map()}
         def new(params) do
           changeset = __MODULE__.changeset(%__MODULE__{}, params)
-          Ecto.Changeset.apply_action(changeset, :new)
+          with {:error, changeset} <- Ecto.Changeset.apply_action(changeset, :new) do
+            {:error, Ectox.Changeset.errors(changeset)}
+          end
+        end
+
+        @spec new!(map()) :: __MODULE__.t()
+        def new!(params) do
+          changeset = __MODULE__.changeset(%__MODULE__{}, params)
+          Ecto.Changeset.apply_action!(changeset, :new)
         end
 
       end

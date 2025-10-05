@@ -40,7 +40,8 @@ const AceInput = {
       theme: "ace/theme/merbivore_soft",
       mode: "ace/mode/yaml"
     })
-    this.editor.session.on("change", () => this.el.value = this.editor.getValue())
+    this.editor.setValue(this.el.value)
+    this.editor.on("change", () => this.el.value = this.editor.getValue())
   },
   updated() {
     this.editor.setValue(this.el.value)

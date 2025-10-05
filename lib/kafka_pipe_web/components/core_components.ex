@@ -470,4 +470,44 @@ defmodule KafkaPipeWeb.CoreComponents do
   def translate_errors(errors, field) when is_list(errors) do
     for {^field, {msg, opts}} <- errors, do: translate_error({msg, opts})
   end
+
+  attr :name, :string, required: true
+  attr :class, :string, default: "btn btn-primary btn-soft bg-none"
+  attr :rest, :global
+  def icon_button(assigns) do
+    ~H"""
+    <.button class={@class} {@rest}>
+      <.icon name={@name} class="size-6" />
+    </.button>
+    """
+  end
+
+  # attr :id, :string, required: true
+  slot :inner_block
+  def modal(assigns) do
+    ~H"""
+    <dialog class="modal" phx-mounted={JS.set_attribute({"open", true})}>
+      <div class="modal-box" phx-click-away="cancel_modal">
+        <.icon_button name="hero-x-mark"
+          class="btn btn-primary btn-soft btn-circle absolute right-2 top-2"
+          phx-click="cancel_modal" />
+        {render_slot(@inner_block)}
+      </div>
+    </dialog>
+    """
+  end
+
+  attr :id, :string, required: true
+  attr :field, Phoenix.HTML.FormField, required: true
+  attr :label, :string, default: nil
+  attr :file, Phoenix.LiveView.UploadConfig, default: nil
+  def ace_input(assigns) do
+    ~H"""
+    <.input field={@field} type="textarea" class="hidden" label={@label} phx-hook="AceInput" phx-ace-id={@id} />
+    <div id={@id} class="w-full mb-2 h-40" phx-update="ignore" />
+    <label :if={@file} for={@file.ref} phx-drop-target={@file.ref} >
+      <.live_file_input upload={@file} class="file-input" />
+    </label>
+    """
+  end
 end

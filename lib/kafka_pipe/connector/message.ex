@@ -8,3 +8,12 @@ defmodule KafkaPipe.Connector.Message do
     field :metadata, map() | nil
   end
 end
+
+defmodule KafkaPipe.Connector.ConfigError do
+  defexception [:source, :sink]
+
+  @impl true
+  def message(%__MODULE__{source: source_errs, sink: sink_errs}) do
+    "#{inspect(source_errs)}, #{sink_errs}"
+  end
+end

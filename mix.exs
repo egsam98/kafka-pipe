@@ -74,6 +74,7 @@ defmodule KafkaPipe.MixProject do
       {:tarams, "~> 1.8.0"},
       {:parent, "~> 0.12.1"},
       {:yaml_elixir, "~> 2.12.0"},
+      {:ymlr, "~> 5.1.4"},
       {:dialyxir, "~> 1.4", only: :dev, runtime: false},
       {:mimic, "~> 2.1.1", only: :test},
       {:benchee, "~> 1.0", only: :test},
