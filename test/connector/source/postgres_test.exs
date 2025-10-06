@@ -8,47 +8,52 @@ defmodule Test.Connector.Source.Postgres do
   import Test.Rand
   import Mimic
 
-  describe "init/1" do
+  describe "init/2" do
     @name rand(:atom)
     @start_lsn %Lsn{file: 0, offset: 25}
 
     setup do
       expect MemberDB, :open, fn @name -> :ok end
-      :ok
+      {:ok, %{config: %{tables: ["test"]}}}
     end
 
-    test "ok without state" do
+    test "ok without state", %{config: cfg} do
       expect MemberDB, :get, fn @name, :commit_lsn -> [] end
+      pid = rand(:pid)
       expect Internal, :start_link, fn [name: _, config: _, start_lsn: %Lsn{file: 0, offset: 0}] ->
-        {:ok, self()}
+        {:ok, pid}
       end
 
-      assert {:producer, %State{name: @name, internal: _},buffer_size: :infinity} =
-        Postgres.init([name: @name, config: nil])
+      assert {:ok, %State{name: @name, internal: pid}} == Postgres.init(@name, cfg)
     end
 
-    test "ok with state" do
+    test "ok with state", %{config: cfg} do
       expect MemberDB, :get, fn @name, :commit_lsn -> [@start_lsn] end
+      pid = rand(:pid)
       expect Internal, :start_link, fn [name: _, config: _, start_lsn: @start_lsn] ->
-        {:ok, self()}
+        {:ok, pid}
       end
 
-      assert {:producer, %State{name: @name, internal: _}, buffer_size: :infinity} =
-        Postgres.init([name: @name, config: nil])
+      assert {:ok, %State{name: @name, internal: pid}} == Postgres.init(@name, cfg)
     end
 
-    test "internal failed" do
+    test "invalid config" do
+      assert {:error, {:start, reason}} = Postgres.init(@name, %{})
+      assert is_map(reason)
+    end
+
+    test "internal failed", %{config: cfg} do
       reason = :crash
       expect MemberDB, :get, fn @name, :commit_lsn -> [] end
       expect Internal, :start_link, fn _ -> {:error, reason} end
 
-      assert {:stop, {:start, ^reason}} = Postgres.init([name: @name, config: nil])
+      assert {:error, {:start, reason}} == Postgres.init(@name, cfg)
     end
   end
 
   test "handle_demand/2" do
     state = %State{internal: nil, name: nil, buffer: Enum.to_list(5..1//-1)}
-    assert {:noreply, messages, new_state} = Postgres.handle_demand(3, state)
+    assert {:ok, messages, new_state} = Postgres.handle_demand(3, state)
     assert state == new_state
     assert messages == [1, 2, 3]
   end
@@ -59,19 +64,19 @@ defmodule Test.Connector.Source.Postgres do
     assert buffer == msgs([3, 2, 1])
   end
 
-  test "handle_call(:ack)/3" do
+  test "handle_ack/2" do
     name = rand(:atom)
-    self = self()
-    state = %State{internal: self, name: name, buffer: msgs([3, 2, 1])}
+    pid = rand(:pid)
+    state = %State{internal: pid, name: name, buffer: msgs([3, 2, 1])}
 
     expect MemberDB, :put, fn ^name, :commit_lsn, lsn ->
       assert lsn == %Lsn{file: 0, offset: 2}
     end
-    expect Internal, :commit_lsn, fn ^self, lsn ->
+    expect Internal, :commit_lsn, fn ^pid, lsn ->
       assert lsn == %Lsn{file: 0, offset: 2}
     end
 
-    assert {:reply, :ok, [], %State{buffer: buffer}} = Postgres.handle_call({:ack, msgs([1, 2])}, self(), state)
+    assert %State{buffer: buffer} = Postgres.handle_ack(msgs([1, 2]), state)
     assert buffer == msgs([3])
   end
 
@@ -168,12 +173,15 @@ defmodule Test.Connector.Source.Postgres.Internal do
     {:ok, %{conn: conn, config: cfg}}
   end
 
-  test "validate messages", %{conn: conn, config: cfg} do
+  test "validate messages", %{conn: conn, config: %Config{publication: pub} = cfg} do
     names = ["Ozzy", "Dio"]
 
     {:ok, pid} = Internal.start_link(name: rand(:atom), config: cfg, start_lsn: @zero_lsn)
-    Postgrex.query!(conn, "INSERT INTO test (id, name) VALUES (1, '#{Enum.at(names, 0)}')")
-    Postgrex.query!(conn, "UPDATE test SET name = '#{Enum.at(names, 1)}' WHERE id = 1")
+    %Postgrex.Result{
+      rows: [[true]]
+    } = Postgrex.query!(conn, "SELECT exists(SELECT 1 FROM pg_publication where pubname = $1)", [pub])
+    Postgrex.query!(conn, "INSERT INTO test (id, name) VALUES (1, $1)", Enum.take(names, 1))
+    Postgrex.query!(conn, "UPDATE test SET name = $1 WHERE id = 1", Enum.take(names, -1))
 
     messages = Stream.resource(
       fn -> 0 end,
@@ -238,7 +246,7 @@ defmodule Test.Connector.Source.Postgres.Internal do
 
   test "slot predefined", %{conn: conn, config: cfg} do
     slot = rand()
-    Postgrex.query!(conn, "SELECT pg_create_logical_replication_slot('#{slot}', 'pgoutput')")
+    Postgrex.query!(conn, "SELECT pg_create_logical_replication_slot($1, 'pgoutput')", [slot])
     cfg = %Config{cfg | slot: slot}
     Internal.start_link(name: String.to_atom(slot), config: cfg, start_lsn: @zero_lsn)
   end

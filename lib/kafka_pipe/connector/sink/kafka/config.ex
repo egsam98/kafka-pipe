@@ -42,7 +42,7 @@ defmodule KafkaPipe.Connector.Sink.Kafka.Config do
     |> validate_list(:endpoints, [
       {&validate_format/4, [~r/^[^\:]+:\d{1,5}$/, [message: "must match {hostname}:{port} format"]]}
     ])
-    |> cast_embed(:batch)
+    |> cast_embed(:batch, required: true)
     |> cast_embed(:topics)
   end
 end

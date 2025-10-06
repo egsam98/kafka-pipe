@@ -10,4 +10,8 @@ defmodule Test.Rand do
     |> List.to_string()
 
   def rand(:atom), do: rand(:string) |> String.to_atom()
+
+  def rand(n) when is_integer(n) and n > 0, do: Enum.random(0..n)
+
+  def rand(:pid), do: IEx.Helpers.pid(0, rand(999), rand(999))
 end

@@ -2,10 +2,20 @@ defmodule KafkaPipe.Connector.Message do
   use TypedStruct
 
   typedstruct do
-    field :topic, String.t() | nil
-    field :key, iodata()
-    field :value, iodata()
-    field :metadata, map() | nil
+    field :topic, String.t()
+    field :key, iodata(), default: ""
+    field :value, iodata(), default: ""
+    field :metadata, map()
+  end
+
+  defimpl Jason.Encoder do
+    def encode(value, opts) do
+      value
+      |> Map.from_struct()
+      |> Map.update!(:key, &IO.iodata_to_binary/1)
+      |> Map.update!(:value, &IO.iodata_to_binary/1)
+      |> Jason.Encode.map(opts)
+    end
   end
 end
 

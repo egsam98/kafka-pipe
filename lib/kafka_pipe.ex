@@ -10,7 +10,10 @@ defmodule KafkaPipe do
   import Logger.Formatter
 
   @spec version() :: String.t()
-  def version, do: Application.spec(:kafka_pipe, :vsn) || ""
+  def version do
+    version = Application.spec(:kafka_pipe, :vsn) || ""
+    IO.chardata_to_string(version)
+  end
 
   @spec test?() :: boolean()
   def test?, do: Application.get_env(:kafka_pipe, :test?, false)

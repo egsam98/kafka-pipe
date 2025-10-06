@@ -8,8 +8,12 @@ defmodule KafkaPipe.Connector.Sink do
 
   @callback init(name :: atom(), config :: %{atom() => any()}) :: {:ok, Batch.t(), state :: any()} | {:error, reason :: any()}
 
-  @callback handle_messages(messages :: [Message.t()], source :: pid(), state) :: {:ok, state} | {:error, reason :: any()}
+  @callback handle_messages(messages :: [Message.t()], state) :: {:ok, state} | {:error, reason :: any()}
   when state: any()
+
+  @callback terminate(reason, state :: any()) :: any() when reason: :normal | :shutdown | {:shutdown, any()} | any()
+
+  @optional_callbacks terminate: 2
 
   typedstruct module: State do
     field :module, atom(), enforce: true
@@ -24,9 +28,8 @@ defmodule KafkaPipe.Connector.Sink do
     | {:config, %{atom() => any()}}
 
   @spec start_link(module(), [start_opt()]) :: GenServer.on_start()
-  def start_link(module, opts) do
-    GenStage.start_link(__MODULE__, {module, opts}, name: Keyword.fetch!(opts, :name))
-  end
+  def start_link(module, opts),
+    do: GenStage.start_link(__MODULE__, {module, opts}, name: Keyword.fetch!(opts, :name))
 
   @impl true
   def init({module, opts}) do
@@ -59,8 +62,12 @@ defmodule KafkaPipe.Connector.Sink do
     batch: %Batch{size: size},
     timer: timer
   } = state) do
-    case mod.handle_messages(messages, source, inner) do
+    payload = Enum.filter(messages, fn %Message{topic: topic} -> topic end)
+
+    case mod.handle_messages(payload, inner) do
       {:ok, inner} ->
+        :ok = Source.ack(source, messages)
+
         timer = if length(messages) >= size do
           if timer, do: Process.cancel_timer(timer)
           send(self(), :timeout)
@@ -83,5 +90,8 @@ defmodule KafkaPipe.Connector.Sink do
   end
 
   @impl true
-  def terminate(reason, _state), do: Logger.info("Stop #{inspect(reason)}")
+  def terminate(reason, %State{module: mod, inner: inner}) do
+    Logger.info("Stop #{inspect(reason)}")
+    if function_exported?(mod, :terminate, 2), do: mod.terminate(reason, inner)
+  end
 end

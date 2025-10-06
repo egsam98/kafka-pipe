@@ -25,4 +25,12 @@ defmodule KafkaPipe.Pg.Lsn do
       Postgrex.PgOutput.Lsn.encode_string({file, offset})
     end
   end
+
+  defimpl Jason.Encoder do
+    def encode(data, _opts) do
+      data
+      |> Lsn.to_int64()
+      |> Jason.Encode.integer()
+    end
+  end
 end

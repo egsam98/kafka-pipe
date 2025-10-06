@@ -15,7 +15,7 @@ defmodule KafkaPipe.Connector.Source do
   @callback handle_demand(demand :: pos_integer(), state) :: {:ok, [Message.t()], state} | {:error, reason :: any()}
   when state: any()
 
-  @callback handle_ack(messages :: [Message.t()], state) :: {:ok, state} when state: any()
+  @callback handle_ack(messages :: [Message.t()], state) :: state when state: any()
 
   @callback handle_cast(request :: term, state :: term) ::
     {:noreply, [event], new_state}
@@ -83,8 +83,8 @@ defmodule KafkaPipe.Connector.Source do
 
   @impl true
   def handle_call({:ack, messages}, _from, %State{module: mod, inner: inner} = state) do
-    {atom, inner} = mod.handle_ack(messages, inner)
-    {:reply, atom, [], %State{state | inner: inner}}
+    inner = mod.handle_ack(messages, inner)
+    {:reply, :ok, [], %State{state | inner: inner}}
   end
 
   @impl true

@@ -101,11 +101,11 @@ defmodule KafkaPipe.Connector.Supervisor do
     ]
 
     {res, state} = case results do
-      [{:ok, _}, {:ok, _}] ->
+      [{:ok, source_cfg}, {:ok, sink_cfg}] ->
         conn = %Conn{
           name: name,
-          source: %Conn.Member{mod: source_mod, config: source_cfg},
-          sink: %Conn.Member{mod: sink_mod, config: sink_cfg}
+          source: %Conn.Member{mod: source_mod, config: Mapx.from_nested_struct(source_cfg)},
+          sink: %Conn.Member{mod: sink_mod, config: Mapx.from_nested_struct(sink_cfg)}
         }
         case persist_conn(name, conn) do
           :ok ->

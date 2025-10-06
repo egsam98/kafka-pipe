@@ -4,7 +4,8 @@ defmodule KafkaPipe.Connector do
   ]
 
   @sink_modules [
-    __MODULE__.Sink.Kafka
+    __MODULE__.Sink.Kafka,
+    __MODULE__.Sink.File
   ]
 
   @type member() :: :source | :sink

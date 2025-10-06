@@ -15,7 +15,7 @@ defmodule KafkaPipe.Connector.Source.Postgres do
   end
 
   @spec start_link([Source.start_opt()]) :: GenServer.on_start() | {:error, {:start, reason}}
-    when reason: Postgrex.Error.t() | any()
+    when reason: map() | Postgrex.Error.t() | any()
   def start_link(opts) do
     with {:error, %Postgrex.Error{} = error} <- Source.start_link(__MODULE__, opts) do
       {:error, {:start, error}}
@@ -56,12 +56,12 @@ defmodule KafkaPipe.Connector.Source.Postgres do
     %Message{metadata: %{lsn: lsn}} = List.last(messages)
     MemberDB.put(name, :commit_lsn, lsn)
     Internal.commit_lsn(internal, lsn)
-    {:ok, %{state | buffer: buffer -- messages}}
+    %State{state | buffer: buffer -- messages}
   end
 
   @impl true
   def handle_cast({:push, msg}, %State{buffer: buffer} = state), do:
-    {:noreply, [], %{state | buffer: [msg | buffer]}}
+    {:noreply, [], %State{state | buffer: [msg | buffer]}}
 
   @impl true
   def handle_info({:EXIT, internal, reason}, %State{internal: internal} = state), do: {:stop, reason, state}

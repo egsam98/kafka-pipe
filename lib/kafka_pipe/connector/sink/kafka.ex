@@ -2,17 +2,13 @@ defmodule KafkaPipe.Connector.Sink.Kafka do
   @behaviour KafkaPipe.Connector.Sink
   use TypedStruct
 
-  alias KafkaPipe.Connector.{Source, Sink, Message}
+  alias KafkaPipe.Connector.{Sink, Message}
   alias __MODULE__.Config
   require Logger
 
   @retry_in 5_000
 
-  typedstruct module: State do
-    field :brod, pid(), enforce: true
-  end
-
-  @spec start_link([Sink.start_opt()]) :: GenServer.on_start() | {:error, {:start, String.t()}}
+  @spec start_link([Sink.start_opt()]) :: GenServer.on_start() | {:error, {:start, map() | String.t()}}
   def start_link(opts), do: Sink.start_link(__MODULE__, opts)
 
   @impl true
@@ -24,9 +20,8 @@ defmodule KafkaPipe.Connector.Sink.Kafka do
   end
 
   @impl true
-  def handle_messages(messages, source, %State{brod: brod} = state) do
-    payload = Enum.filter(messages, fn %Message{topic: topic} -> topic end)
-    results = payload
+  def handle_messages(messages, brod) do
+    results = messages
       |> Enum.group_by(fn %Message{topic: topic} -> topic end)
       |> Task.async_stream(fn {topic, messages} -> produce(topic, messages, brod) end, timeout: :infinity)
       |> Enum.into([])
@@ -34,11 +29,9 @@ defmodule KafkaPipe.Connector.Sink.Kafka do
     case Keyword.fetch(results, :exit) do
       {:ok, {reason, _messages}} -> {:error, reason}
       :error ->
-        n = length(payload)
+        n = length(messages)
         if n > 0, do: Logger.info("Produced #{n} messages")
-
-        :ok = Source.ack(source, messages)
-        {:ok, state}
+        {:ok, brod}
     end
   end
 
@@ -52,7 +45,7 @@ defmodule KafkaPipe.Connector.Sink.Kafka do
     with :ok <- maybe_create_topics(brod_endpoints, topics),
       {:ok, pid} <- :brod.start_link_client(brod_endpoints, :"#{name}.brod", auto_start_producers: true)
     do
-      {:ok, batch, %State{brod: pid}}
+      {:ok, batch, pid}
     else
       {:error, reason} ->
         msg = case reason do
