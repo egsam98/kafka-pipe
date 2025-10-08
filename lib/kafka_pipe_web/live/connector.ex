@@ -155,13 +155,20 @@ defmodule KafkaPipeWeb.Live.Connector do
 
   @impl true
   def handle_event("stop", %{"name" => name}, socket) do
-    socket = case Connector.Supervisor.stop_child(name) do
-      {:ok, conn} -> socket
-        |> stream_insert(:connectors, conn_view(conn))
-        |> put_flash(:info, "Connector has been stopped")
-      {:error, :not_found} -> put_flash(socket, :error, "Connector not found")
-      {:error, reason} -> put_flash(socket, :error, to_string(reason))
-    end
+    socket =
+      try do
+        case Connector.Supervisor.stop_child(name) do
+          {:ok, conn} -> socket
+            |> stream_insert(:connectors, conn_view(conn))
+            |> put_flash(:info, "Connector has been stopped")
+          {:error, :not_found} -> put_flash(socket, :error, "Connector not found")
+          {:error, :busy} -> put_flash(socket, :warning, "Connector is busy")
+          {:error, reason} -> put_flash(socket, :error, to_string(reason))
+        end
+      catch
+        :exit, {:timeout, _} -> put_flash(socket, :warning, "Connector is busy")
+      end
+
     {:noreply, socket}
   end
 
@@ -199,16 +206,16 @@ defmodule KafkaPipeWeb.Live.Connector do
   defp conn_view(%Supervisor.Conn{name: name} = conn) do
     conn
     |> Map.from_struct()
-    |> Map.update!(:source, &member_view(name, &1))
-    |> Map.update!(:sink, &member_view(name, &1))
+    |> Map.update!(:source, &member_view(name, :source, &1))
+    |> Map.update!(:sink, &member_view(name, :sink, &1))
   end
 
-  @spec member_view(String.t(), Supervisor.Conn.Member.t()) :: map()
-  defp member_view(name, %Supervisor.Conn.Member{mod: mod} = member) do
+  @spec member_view(String.t(), Connector.member(), Supervisor.Conn.Member.t()) :: map()
+  defp member_view(name, member_type, %Supervisor.Conn.Member{mod: mod} = member) do
     member
     |> Map.from_struct()
     |> Map.put(:mod, Connector.humanize(mod))
-    |> Map.put(:pid, Connector.Supervisor.member_pid(name, :source))
+    |> Map.put(:pid, Connector.Supervisor.member_pid(name, member_type))
   end
 
   @spec changeset_add_errors(Ecto.Changeset.t(), atom(), %{atom() => [String.t()]}) :: Ecto.Changeset.t()

@@ -1,5 +1,5 @@
 defmodule KafkaPipe.Connector.Source do
-  use GenStage
+  use GenServer
   use TypedStruct
 
   alias KafkaPipe.Connector.Message
@@ -12,51 +12,51 @@ defmodule KafkaPipe.Connector.Source do
 
   @callback init(name :: atom(), config :: %{atom() => any()}) :: {:ok, state :: any()} | {:error, reason :: any()}
 
-  @callback handle_demand(demand :: pos_integer(), state) :: {:ok, [Message.t()], state} | {:error, reason :: any()}
+  @callback handle_poll(count :: pos_integer(), state) :: {:ok, [Message.t()], state} | {:error, reason :: any()}
   when state: any()
 
   @callback handle_ack(messages :: [Message.t()], state) :: state when state: any()
 
-  @callback handle_cast(request :: term, state :: term) ::
-    {:noreply, [event], new_state}
-    | {:noreply, [event], new_state, :hibernate}
-    | {:stop, reason :: term, new_state}
-  when new_state: term, event: term
-
-  @callback handle_call(request :: term, from :: GenServer.from(), state :: term) ::
-    {:reply, reply, [event], new_state}
-    | {:reply, reply, [event], new_state, :hibernate}
-    | {:noreply, [event], new_state}
-    | {:noreply, [event], new_state, :hibernate}
+  @callback handle_call(request :: term(), GenServer.from(), state :: term()) ::
+    {:reply, reply, new_state}
+    | {:reply, reply, new_state,
+      timeout() | :hibernate | {:continue, continue_arg :: term()}}
+    | {:noreply, new_state}
+    | {:noreply, new_state,
+      timeout() | :hibernate | {:continue, continue_arg :: term()}}
     | {:stop, reason, reply, new_state}
     | {:stop, reason, new_state}
-  when reply: term, new_state: term, reason: term, event: term
+  when reply: term(), new_state: term(), reason: term()
 
-  @callback handle_info(message :: term, state :: term) ::
-    {:noreply, [event], new_state}
-    | {:noreply, [event], new_state, :hibernate}
-    | {:stop, reason :: term, new_state}
-  when new_state: term, event: term
+  @callback handle_cast(request :: term(), state :: term()) ::
+    {:noreply, new_state}
+    | {:noreply, new_state,
+      timeout() | :hibernate | {:continue, continue_arg :: term()}}
+    | {:stop, reason :: term(), new_state}
+  when new_state: term()
 
-  @callback terminate(reason, state :: any()) :: any() when reason: :normal | :shutdown | {:shutdown, any()} | any()
+  @callback handle_info(msg :: :timeout | term(), state :: term()) ::
+    {:noreply, new_state}
+    | {:noreply, new_state,
+      timeout() | :hibernate | {:continue, continue_arg :: term()}}
+    | {:stop, reason :: term(), new_state}
+  when new_state: term()
+
+  @callback terminate(reason, state :: term()) :: term() when reason: :normal | :shutdown | {:shutdown, term()} | term()
 
   @optional_callbacks handle_call: 3, handle_cast: 2, handle_info: 2, terminate: 2
 
   @type start_opt :: {:name, atom()} | {:config, %{atom() => any()}}
 
   @spec start_link(module(), [start_opt()]) :: GenServer.on_start()
-  def start_link(module, opts) do
-    GenStage.start_link(__MODULE__, {module, opts}, name: Keyword.fetch!(opts, :name))
-  end
+  def start_link(module, opts),
+    do: GenServer.start_link(__MODULE__, {module, opts}, name: Keyword.fetch!(opts, :name))
 
-  @spec ack(GenStage.stage(), [Message.t()]) :: :ok
-  def ack(stage, messages), do: GenStage.call(stage, {:ack, messages}, :infinity)
+  @spec poll(GenServer.server(), non_neg_integer()) :: [Message.t()]
+  def poll(server, count), do: GenServer.call(server, {:poll, count})
 
-  @spec ask(GenStage.from(), non_neg_integer()) :: :ok | :noconnect | :nosuspend
-  defdelegate ask(from, demand), to: GenStage
-
-  @spec cast(GenStage.stage(), any()) :: :ok
-  defdelegate cast(stage, args), to: GenStage
+  @spec ack(GenServer.server(), [Message.t()]) :: :ok
+  def ack(server, messages), do: GenServer.call(server, {:ack, messages})
 
   @impl true
   def init({module, opts}) do
@@ -68,15 +68,15 @@ defmodule KafkaPipe.Connector.Source do
     Logger.info("Start")
 
     case module.init(name, cfg) do
-      {:ok, state} -> {:producer, %State{module: module, inner: state}, buffer_size: :infinity}
+      {:ok, state} -> {:ok, %State{module: module, inner: state}}
       {:error, reason} -> {:stop, reason}
     end
   end
 
   @impl true
-  def handle_demand(demand, %State{module: mod, inner: inner} = state) do
-    case mod.handle_demand(demand, inner) do
-      {:ok, messages, inner} -> {:noreply, messages, %State{state | inner: inner}}
+  def handle_call({:poll, count}, _from, %State{module: mod, inner: inner} = state) do
+    case mod.handle_poll(count, inner) do
+      {:ok, messages, inner} -> {:reply, messages, %State{state | inner: inner}}
       {:error, reason} -> {:stop, reason, state}
     end
   end
@@ -84,7 +84,7 @@ defmodule KafkaPipe.Connector.Source do
   @impl true
   def handle_call({:ack, messages}, _from, %State{module: mod, inner: inner} = state) do
     inner = mod.handle_ack(messages, inner)
-    {:reply, :ok, [], %State{state | inner: inner}}
+    {:reply, :ok, %State{state | inner: inner}}
   end
 
   @impl true

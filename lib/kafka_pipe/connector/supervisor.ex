@@ -25,7 +25,7 @@ defmodule KafkaPipe.Connector.Supervisor do
   @type state :: %{String.t() => Conn.t()}
 
   @dir KafkaPipe.connector_dir()
-  @restart_delay 3_000
+  @restart_delay 5_000
 
   @spec start_link(any()) :: Supervisor.on_start()
   def start_link(_args), do:
@@ -248,7 +248,7 @@ defmodule KafkaPipe.Connector.Supervisor do
     source_name = :"#{name}.source"
     sink_name = :"#{name}.sink"
     source_opts = [name: source_name, config: source_cfg]
-    sink_opts = [name: sink_name, config: sink_cfg, subscribe_to: [source_name]]
+    sink_opts = [name: sink_name, config: sink_cfg, source: source_name]
 
     source_spec = %{
       id: source_name,

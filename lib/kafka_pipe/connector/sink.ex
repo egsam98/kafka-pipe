@@ -1,5 +1,5 @@
 defmodule KafkaPipe.Connector.Sink do
-  use GenStage
+  use GenServer
   use TypedStruct
 
   alias KafkaPipe.Connector.{Source, Message}
@@ -16,82 +16,81 @@ defmodule KafkaPipe.Connector.Sink do
   @optional_callbacks terminate: 2
 
   typedstruct module: State do
+    field :source, GenServer.server(), enforce: true
     field :module, atom(), enforce: true
     field :inner, any(), enforce: true
     field :batch, Batch.t(), enforce: true
-    field :source, GenStage.from()
-    field :timer, reference()
   end
 
-  @type start_opt() :: {:name, atom()}
-    | {:subscribe_to, [atom() | pid() | {GenServer.server(), GenStage.subscription_options()}]}
-    | {:config, %{atom() => any()}}
+  @type start_opt() :: {:name, atom()} | {:source, GenServer.server()} | {:config, %{atom() => any()}}
 
   @spec start_link(module(), [start_opt()]) :: GenServer.on_start()
   def start_link(module, opts),
-    do: GenStage.start_link(__MODULE__, {module, opts}, name: Keyword.fetch!(opts, :name))
+    do: GenServer.start_link(__MODULE__, {module, opts}, name: Keyword.fetch!(opts, :name))
 
   @impl true
   def init({module, opts}) do
     Process.flag(:trap_exit, true)
     name = Keyword.fetch!(opts, :name)
     cfg = Keyword.fetch!(opts, :config)
-    subscribe_to = Keyword.fetch!(opts, :subscribe_to)
+    source = Keyword.fetch!(opts, :source)
 
     Logger.metadata(name: name)
     Logger.info("Start")
 
     case module.init(name, cfg) do
-      {:ok, batch, state} ->
-        state = %State{module: module, inner: state, batch: batch}
-        {:consumer, state, subscribe_to: subscribe_to}
+      {:ok, %Batch{timeout: timeout} = batch, state} ->
+        Process.send_after(self(), :timeout, timeout)
+        state = %State{source: source, module: module, inner: state, batch: batch}
+        {:ok, state}
       {:error, reason} -> {:stop, reason}
     end
   end
 
   @impl true
-  def handle_subscribe(:producer, _opts, from, %State{batch: %Batch{timeout: timeout}} = state) do
-    timer = Process.send_after(self(), :timeout, timeout)
-    {:manual, %State{state | timer: timer, source: from}}
-  end
-
-  @impl true
-  def handle_events(messages, {source, _}, %State{
+  def handle_info(:timeout, %State{
+    batch: %Batch{size: size, timeout: timeout},
+    source: source,
     module: mod,
-    inner: inner,
-    batch: %Batch{size: size},
-    timer: timer
+    inner: inner
   } = state) do
-    payload = Enum.filter(messages, fn %Message{topic: topic} -> topic end)
+    messages = Source.poll(source, size)
 
-    case mod.handle_messages(payload, inner) do
+    case handle_messages(messages, source, mod, inner) do
       {:ok, inner} ->
-        :ok = Source.ack(source, messages)
-
-        timer = if length(messages) >= size do
-          if timer, do: Process.cancel_timer(timer)
-          send(self(), :timeout)
-          nil
-        else
-          timer
-        end
-
-        {:noreply, [], %State{state | inner: inner, timer: timer}}
-      {:error, reason} ->
-        {:stop, reason, state}
+        Process.send_after(
+          self(),
+           :timeout,
+          (if length(messages) >= size, do: 0, else: timeout)
+        )
+        {:noreply, %State{state | inner: inner}}
+      {:error, reason} -> {:stop, reason, state}
     end
-  end
-
-  @impl true
-  def handle_info(:timeout, %State{batch: %Batch{size: size, timeout: timeout}, source: source} = state) do
-    Source.ask(source, size)
-    timer = Process.send_after(self(), :timeout, timeout)
-    {:noreply, [], %State{state | timer: timer}}
+  catch
+    :exit, {reason, _} ->
+      Logger.error("Failed to poll messages from #{source}: #{reason}")
+      Process.send_after(self(), :timeout, timeout)
+      {:noreply, state}
   end
 
   @impl true
   def terminate(reason, %State{module: mod, inner: inner}) do
     Logger.info("Stop #{inspect(reason)}")
     if function_exported?(mod, :terminate, 2), do: mod.terminate(reason, inner)
+  end
+
+  @spec handle_messages([Message.t()], GenServer.server(), module(), inner) :: {:ok, inner} | {:error, any()} when inner: any()
+  defp handle_messages([], _source, _mod, inner), do: {:ok, inner}
+
+  defp handle_messages(messages, source, mod, inner) do
+    payload = Enum.filter(messages, fn %Message{topic: topic} -> topic end)
+    cb_result = if length(payload) > 0,
+      do: mod.handle_messages(payload, inner),
+      else: {:ok, inner}
+
+    with {:ok, inner} <- cb_result do
+      :ok = Source.ack(source, messages)
+      {:ok, inner}
+    end
   end
 end

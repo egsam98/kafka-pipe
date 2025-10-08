@@ -5,8 +5,10 @@ defmodule KafkaPipe.Connector.Sink.Kafka do
   alias KafkaPipe.Connector.{Sink, Message}
   alias __MODULE__.Config
   require Logger
+  import Bitwise
 
   @retry_in 5_000
+  @producer_config [max_batch_size: 3 <<< 20, compression: :snappy]
 
   @spec start_link([Sink.start_opt()]) :: GenServer.on_start() | {:error, {:start, map() | String.t()}}
   def start_link(opts), do: Sink.start_link(__MODULE__, opts)
@@ -43,7 +45,8 @@ defmodule KafkaPipe.Connector.Sink.Kafka do
     end)
 
     with :ok <- maybe_create_topics(brod_endpoints, topics),
-      {:ok, pid} <- :brod.start_link_client(brod_endpoints, :"#{name}.brod", auto_start_producers: true)
+      {:ok, pid} <- :brod.start_link_client(brod_endpoints, :"#{name}.brod",
+        auto_start_producers: true, default_producer_config: @producer_config)
     do
       {:ok, batch, pid}
     else

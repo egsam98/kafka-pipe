@@ -1,6 +1,7 @@
 defmodule KafkaPipe.Connector do
   @source_modules [
-    __MODULE__.Source.Postgres
+    __MODULE__.Source.Postgres,
+    __MODULE__.Source.Kafka
   ]
 
   @sink_modules [

@@ -23,7 +23,7 @@ defmodule KafkaPipe.Connector.Source.Postgres do
   end
 
   @spec push(pid(), Message.t()) :: :ok
-  def push(pid, message), do: Source.cast(pid, {:push, message})
+  def push(pid, message), do: GenServer.cast(pid, {:push, message})
 
   @impl true
   def init(name, cfg) do
@@ -44,9 +44,9 @@ defmodule KafkaPipe.Connector.Source.Postgres do
   end
 
   @impl true
-  def handle_demand(demand, %State{buffer: buffer} = state) do
+  def handle_poll(count, %State{buffer: buffer} = state) do
     messages = buffer
-      |> Enum.take(-demand)
+      |> Enum.take(-count)
       |> Enum.reverse()
     {:ok, messages, state}
   end
@@ -61,7 +61,7 @@ defmodule KafkaPipe.Connector.Source.Postgres do
 
   @impl true
   def handle_cast({:push, msg}, %State{buffer: buffer} = state), do:
-    {:noreply, [], %State{state | buffer: [msg | buffer]}}
+    {:noreply, %State{state | buffer: [msg | buffer]}}
 
   @impl true
   def handle_info({:EXIT, internal, reason}, %State{internal: internal} = state), do: {:stop, reason, state}

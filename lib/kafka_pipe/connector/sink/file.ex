@@ -6,41 +6,28 @@ defmodule KafkaPipe.Connector.Sink.File do
   alias __MODULE__.Config
   require Logger
 
-  typedstruct module: State do
-    field :path, Path.t()
-    field :file, File.io_device()
-  end
-
   @spec start_link([Sink.start_opt()]) :: GenServer.on_start() | {:error, {:start, map() | String.t()}}
   def start_link(opts), do: Sink.start_link(__MODULE__, opts)
 
   @impl true
   def init(_name, cfg) do
-    with {:ok, %Config{batch: batch, path: path}} <- Config.new(cfg),
-      {:ok, file} <- File.open(path, [:append])
-    do
-      {:ok, batch, %State{path: path, file: file}}
-    else
+    case Config.new(cfg) do
+      {:ok, %Config{batch: batch, path: path}} -> {:ok, batch, path}
       {:error, reason} -> {:error, {:start, reason}}
     end
   end
 
   @impl true
-  def handle_messages(messages, %State{path: path, file: file} = state) do
+  def handle_messages(messages, path) do
+    {:ok, file} = File.open(path, [:append])
     for msg <- messages do
       IO.write(file, [Jason.encode!(msg), "\n"])
     end
+    :ok = File.close(file)
 
     n = length(messages)
     if n > 0, do: Logger.info("#{n} messages have been recorded to #{path}")
 
-    {:ok, state}
-  end
-
-  @impl true
-  def terminate(_reason, %State{file: file}) do
-    with {:error, reason} <- File.close(file) do
-      Logger.error("Failed to close file: #{reason}")
-    end
+    {:ok, path}
   end
 end
