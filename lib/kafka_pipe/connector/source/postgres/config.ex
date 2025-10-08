@@ -16,7 +16,7 @@ defmodule KafkaPipe.Connector.Source.Postgres.Config do
     field :tables, {:array, :string}
     field :publication, :string, default: "kafka_pipe"
     field :slot, :string, default: "kafka_pipe"
-    field(:timestamp_format, Ecto.Enum, values: @timestamp_formats, null: false, default: :millisecond) :: timestamp_format()
+    field(:timestamp_format, Ecto.Enum, values: @timestamp_formats, default: :millisecond) :: timestamp_format()
   end
 
   @impl Ectox.Ctor
@@ -26,5 +26,8 @@ defmodule KafkaPipe.Connector.Source.Postgres.Config do
     |> validate_required(fields)
     |> validate_number(:port, greater_than: 0)
     |> validate_length(:tables, min: 1)
+    |> validate_list(:tables, [
+      {&validate_required/2, []}
+    ])
   end
 end

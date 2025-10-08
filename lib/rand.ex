@@ -1,4 +1,4 @@
-defmodule Test.Rand do
+defmodule Rand do
   @alphabet Enum.concat([?a..?z, [?_]])
   @length 10
 

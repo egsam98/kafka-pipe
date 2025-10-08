@@ -2,7 +2,7 @@ defmodule KafkaPipe.Connector.Sink.File do
   @behaviour KafkaPipe.Connector.Sink
   use TypedStruct
 
-  alias KafkaPipe.Connector.Sink
+  alias KafkaPipe.Connector.{Sink, Message}
   alias __MODULE__.Config
   require Logger
 
@@ -20,7 +20,7 @@ defmodule KafkaPipe.Connector.Sink.File do
   @impl true
   def handle_messages(messages, path) do
     {:ok, file} = File.open(path, [:append])
-    for msg <- messages do
+    for %Message{topic: topic} = msg <- messages, topic do
       IO.write(file, [Jason.encode!(msg), "\n"])
     end
     :ok = File.close(file)

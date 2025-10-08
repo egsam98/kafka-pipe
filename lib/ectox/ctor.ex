@@ -1,5 +1,5 @@
 defmodule Ectox.Ctor do
-  @callback changeset(Ecto.Schema.t(), map()) :: Ecto.Changeset.t()
+  @callback changeset(t :: Ecto.Schema.t(), params :: map()) :: Ecto.Changeset.t()
 
   defmacro __using__(_opts) do
     quote do

@@ -1,12 +1,14 @@
 defmodule KafkaPipe.Connector do
   @source_modules [
     __MODULE__.Source.Postgres,
-    __MODULE__.Source.Kafka
+    __MODULE__.Source.Kafka,
+    __MODULE__.Source.Randomizer,
   ]
 
   @sink_modules [
     __MODULE__.Sink.Kafka,
-    __MODULE__.Sink.File
+    __MODULE__.Sink.File,
+    __MODULE__.Sink.ClickHouse,
   ]
 
   @type member() :: :source | :sink
