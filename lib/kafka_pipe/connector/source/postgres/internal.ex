@@ -181,7 +181,7 @@ defmodule KafkaPipe.Connector.Source.Postgres.Internal do
   @spec push_stub(pid(), Lsn.t()) :: :ok
   defp push_stub(pid, lsn), do: Postgres.push(pid, %Message{key: "", value: "", metadata: %{lsn: lsn}})
 
-  @spec decode(any(), String.t(), Config.timestamp_format()) :: String.t() | pos_integer()
+  @spec decode(binary(), String.t(), Config.timestamp_format()) :: any()
   defp decode(value, "timestamp", :rfc3339), do: value
 
   defp decode(value, "timestamp", ts_format) when ts_format in [:second, :millisecond] do
@@ -189,6 +189,8 @@ defmodule KafkaPipe.Connector.Source.Postgres.Internal do
     |> NaiveDateTime.from_iso8601!()
     |> NaiveDateTime.diff(@unix_epoch, ts_format)
   end
+
+  defp decode(value, "numeric", _), do: value
 
   defp decode(value, type, _), do: Postgrex.PgOutput.decode_value(value, type)
 end

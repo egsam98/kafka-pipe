@@ -5,7 +5,7 @@ defmodule Test.Connector.Source.Postgres do
   alias KafkaPipe.Pg.Lsn
   alias KafkaPipe.Connector.Message
   alias KafkaPipe.Connector.Source.{Postgres, Postgres.State, Postgres.Internal}
-  import Test.Rand
+  import Rand
   import Mimic
 
   describe "init/2" do
@@ -51,16 +51,16 @@ defmodule Test.Connector.Source.Postgres do
     end
   end
 
-  test "handle_demand/2" do
+  test "handle_poll/2" do
     state = %State{internal: nil, name: nil, buffer: Enum.to_list(5..1//-1)}
-    assert {:ok, messages, new_state} = Postgres.handle_demand(3, state)
+    assert {:ok, messages, new_state} = Postgres.handle_poll(3, state)
     assert state == new_state
     assert messages == [1, 2, 3]
   end
 
   test "handle_cast(:push)/2" do
     state = %State{internal: nil, name: nil, buffer: msgs([2, 1])}
-    assert {:noreply, [], %State{buffer: buffer}} = Postgres.handle_cast({:push, msg(3)}, state)
+    assert {:noreply, %State{buffer: buffer}} = Postgres.handle_cast({:push, msg(3)}, state)
     assert buffer == msgs([3, 2, 1])
   end
 
@@ -149,7 +149,7 @@ defmodule Test.Connector.Source.Postgres.Internal do
   alias KafkaPipe.Connector.Message
   alias KafkaPipe.Connector.Source.Postgres.{Config, Internal, Internal.State}
   alias KafkaPipe.Pg.Lsn
-  import Test.Rand
+  import Rand
 
   @version KafkaPipe.version()
   @zero_lsn %Lsn{file: 0, offset: 0}
@@ -173,13 +173,10 @@ defmodule Test.Connector.Source.Postgres.Internal do
     {:ok, %{conn: conn, config: cfg}}
   end
 
-  test "validate messages", %{conn: conn, config: %Config{publication: pub} = cfg} do
+  test "validate messages", %{conn: conn, config: cfg} do
     names = ["Ozzy", "Dio"]
 
     {:ok, pid} = Internal.start_link(name: rand(:atom), config: cfg, start_lsn: @zero_lsn)
-    %Postgrex.Result{
-      rows: [[true]]
-    } = Postgrex.query!(conn, "SELECT exists(SELECT 1 FROM pg_publication where pubname = $1)", [pub])
     Postgrex.query!(conn, "INSERT INTO test (id, name) VALUES (1, $1)", Enum.take(names, 1))
     Postgrex.query!(conn, "UPDATE test SET name = $1 WHERE id = 1", Enum.take(names, -1))
 

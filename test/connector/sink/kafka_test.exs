@@ -5,7 +5,7 @@ defmodule Test.Connector.Sink.Kafka do
   alias KafkaPipe.Connector.Sink.{Batch, Kafka, Kafka.Config}
 
   import Mimic
-  import Test.Rand
+  import Rand
 
   describe "init/2" do
     setup do
@@ -63,7 +63,7 @@ defmodule Test.Connector.Sink.Kafka do
 
       spawn_link(fn ->
         assert_receive {:"$gen_call", from, {:ack, ^msgs}}, 1_000
-        GenStage.reply(from, :ok)
+        GenServer.reply(from, :ok)
       end)
 
       {:ok, %{msgs: msgs}}

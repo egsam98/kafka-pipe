@@ -43,7 +43,7 @@ defmodule KafkaPipe.Connector.Sink.ClickHouse do
   def handle_messages(messages, %State{db: db, conn: conn} = state) do
     results = messages
       |> Enum.group_by(fn %Message{topic: topic} -> topic end)
-      |> Task.async_stream(fn {topic, msgs} -> insert(topic, msgs, conn, db) end) # Handle errors
+      |> Task.async_stream(fn {topic, msgs} -> insert(topic, msgs, conn, db) end) # TODO handle errors
       |> Enum.to_list()
 
     case Keyword.fetch(results, :exit) do

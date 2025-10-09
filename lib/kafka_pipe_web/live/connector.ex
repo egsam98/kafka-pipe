@@ -84,8 +84,8 @@ defmodule KafkaPipeWeb.Live.Connector do
       } ->
         form = %Request.Update{
             name: name,
-            source_config: Yaml.encode(source_cfg),
-            sink_config: Yaml.encode(sink_cfg)
+            source_config: Yaml.encode!(source_cfg),
+            sink_config: Yaml.encode!(sink_cfg)
           }
           |> Ecto.Changeset.change()
           |> to_form(action: :update)
