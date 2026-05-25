@@ -1,0 +1,34 @@
+
+version: "2"
+linters:
+  enable:
+    - predeclared
+    - nilerr
+    - copyloopvar
+    - gosec
+    - bodyclose
+    - dogsled
+    - durationcheck
+    - errorlint
+    - misspell
+    - unparam
+    - exhaustive
+  settings:
+    gosec:
+      # https://github.com/securego/gosec/blob/master/RULES.md
+      excludes:
+        - G103
+        - G107
+        - G115
+        - G117
+        - G703
+    exhaustive:
+      default-signifies-exhaustive: true
+    govet:
+      disable:
+        - printf
+  exclusions:
+    rules:
+      - linters:
+          - errcheck
+        source: defer\s+[\w\.]+\.Close\(\)|fmt.Fprint\w*

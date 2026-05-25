@@ -6,6 +6,9 @@ import (
 	"time"
 
 	"code.cloudfoundry.org/bytefmt"
+	"github.com/egsam98/ecto"
+	ectosl "github.com/egsam98/ecto/slices"
+	ectos "github.com/egsam98/ecto/strings"
 	"github.com/pkg/errors"
 	"github.com/twmb/franz-go/pkg/sasl"
 	"github.com/twmb/franz-go/pkg/sasl/aws"
@@ -22,89 +25,82 @@ type Connector interface {
 }
 
 type ProducerConfig struct {
-	// [warden]
-	// non-empty = true
-	// [warden.dive]
-	// url = true
-	Brokers []string `yaml:"brokers"`
-	// [warden]
-	// dive = true
-	Topic struct {
-		Prefix string `yaml:"prefix"`
-		// [warden]
-		// default = 1
-		ReplicationFactor uint16 `yaml:"replication.factor"`
-		// [warden]
-		// default = 1
-		Partitions uint32 `yaml:"partitions"`
-		// [warden]
-		// default = "delete"
-		CleanupPolicy string `yaml:"cleanup.policy"`
-		// [warden]
-		// default = "producer"
-		CompressionType string `yaml:"compression.type"`
-		// [warden]
-		// default = "168h"
-		Retention time.Duration `yaml:"retention"`
-		// [warden]
-		// default = "10GB"
-		PartRetentionSize string            `yaml:"part_retention_size"`
-		Routes            map[string]string `yaml:"routes"`
-	} `yaml:"topic"`
-	// [warden]
-	// dive = true
-	Batch BatchConfig `yaml:"batch"`
+	Brokers []string    `yaml:"brokers"`
+	Topic   TopicConfig `yaml:"topic"`
+	Batch   BatchConfig `yaml:"batch"`
 }
 
+type TopicConfig struct {
+	Prefix            string            `yaml:"prefix"`
+	ReplicationFactor uint16            `yaml:"replication.factor"`
+	Partitions        uint32            `yaml:"partitions"`
+	CleanupPolicy     string            `yaml:"cleanup.policy"`
+	CompressionType   string            `yaml:"compression.type"`
+	Retention         time.Duration     `yaml:"retention"`
+	PartRetentionSize string            `yaml:"part_retention_size"`
+	Routes            map[string]string `yaml:"routes"`
+}
+
+var ProducerCfgSchema = ecto.Struct[ProducerConfig](ecto.M{
+	"Brokers": ecto.Slice[[]string](
+		ecto.String().Test(ectos.URL()),
+	).Test(ectosl.Min[[]string](1)),
+	"Topic": ecto.Struct[TopicConfig](ecto.M{
+		"ReplicationFactor": ecto.Atomic[uint16]().Default(1),
+		"Partitions":        ecto.Atomic[uint32]().Default(1),
+		"CleanupPolicy":     ecto.String().Default("delete"),
+		"CompressionType":   ecto.String().Default("producer"),
+		"Retention":         ecto.Atomic[time.Duration]().Default(168 * time.Hour),
+		"PartRetentionSize": ecto.String().Default("10GB"),
+	}),
+	"Batch": BatchCfgSchema,
+})
+
 func (c *ProducerConfig) TopicMapConfig() (map[string]*string, error) {
-	retentionMs := strconv.FormatInt(c.Topic.Retention.Milliseconds(), 10)
 	retentionBytes, err := bytefmt.ToBytes(c.Topic.PartRetentionSize)
 	if err != nil {
 		return nil, errors.Wrap(err, "parse part_retention_size: "+c.Topic.PartRetentionSize)
 	}
-	retentionBytesStr := strconv.FormatUint(retentionBytes, 10)
 	return map[string]*string{
 		"compression.type": &c.Topic.CompressionType,
 		"cleanup.policy":   &c.Topic.CleanupPolicy,
-		"retention.ms":     &retentionMs,
-		"retention.bytes":  &retentionBytesStr,
+		"retention.ms":     new(strconv.FormatInt(c.Topic.Retention.Milliseconds(), 10)),
+		"retention.bytes":  new(strconv.FormatUint(retentionBytes, 10)),
 	}, nil
 }
 
 type ConsumerPoolConfig struct {
-	// [warden]
-	// required = true
-	Group string `yaml:"group"`
-	// [warden]
-	// non-empty = true
-	// [warden.dive]
-	// url = true
-	Brokers []string `yaml:"brokers"`
-	// [warden]
-	// non-empty = true
-	Topics []string `yaml:"topics"`
-	// [warden]
-	// default = "1m"
-	RebalanceTimeout time.Duration `yaml:"rebalance_timeout"`
-	// [warden]
-	// default = 1
-	WorkersPerTopic        uint `yaml:"workers_per_topic"`
-	FetchMaxBytes          uint `yaml:"fetch_max_bytes"`
-	FetchMaxPartitionBytes uint `yaml:"fetch_max_partition_bytes"`
-	// [warden]
-	// dive = true
-	Batch BatchConfig    `yaml:"batch"`
-	SASL  sasl.Mechanism `yaml:"-"`
+	Group                  string         `yaml:"group"`
+	Brokers                []string       `yaml:"brokers"`
+	Topics                 []string       `yaml:"topics"`
+	RebalanceTimeout       time.Duration  `yaml:"rebalance_timeout"`
+	WorkersPerTopic        uint           `yaml:"workers_per_topic"`
+	FetchMaxBytes          uint           `yaml:"fetch_max_bytes"`
+	FetchMaxPartitionBytes uint           `yaml:"fetch_max_partition_bytes"`
+	Batch                  BatchConfig    `yaml:"batch"`
+	SASL                   sasl.Mechanism `yaml:"-"`
 }
 
 type BatchConfig struct {
-	// [warden]
-	// default = 10000
-	Size uint `yaml:"size"`
-	// [warden]
-	// default = "5s"
+	Size    uint          `yaml:"size"`
 	Timeout time.Duration `yaml:"timeout"`
 }
+
+var ConsumerPoolCfgSchema = ecto.Struct[ConsumerPoolConfig](ecto.M{
+	"Group": ecto.String().Required(),
+	"Brokers": ecto.Slice[[]string](
+		ecto.String().Test(ectos.URL()),
+	).Test(ectosl.Min[[]string](1)),
+	"Topics":           ecto.Slice[[]string](ecto.String()).Test(ectosl.Min[[]string](1)),
+	"RebalanceTimeout": ecto.Atomic[time.Duration]().Default(time.Minute),
+	"WorkersPerTopic":  ecto.Atomic[uint]().Default(1),
+	"Batch":            BatchCfgSchema,
+})
+
+var BatchCfgSchema = ecto.Struct[BatchConfig](ecto.M{
+	"Size":    ecto.Atomic[uint]().Default(10000),
+	"Timeout": ecto.Atomic[time.Duration]().Default(5 * time.Second),
+})
 
 func (c *ConsumerPoolConfig) UnmarshalYAML(node *yaml.Node) error {
 	type inline ConsumerPoolConfig // Avoid stack overflow
@@ -167,9 +163,8 @@ func newSASLFromYAML(node yaml.Node) (sasl.Mechanism, error) {
 		}
 		if protocol.Value == "scram-256" {
 			return auth.AsSha256Mechanism(), nil
-		} else {
-			return auth.AsSha512Mechanism(), nil
 		}
+		return auth.AsSha512Mechanism(), nil
 	case "oauth":
 		var cfg struct {
 			Zid   string `yaml:"zid"`

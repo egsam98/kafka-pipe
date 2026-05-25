@@ -66,7 +66,7 @@ func (j *JSON) Deserialize(dst any, _ string, src []byte) error {
 	defer jsoniter.ConfigDefault.ReturnIterator(iter)
 	iter.Attachment = j
 	iter.ReadVal(dst)
-	if iter.Error == io.EOF {
+	if errors.Is(iter.Error, io.EOF) {
 		return nil
 	}
 	return iter.Error

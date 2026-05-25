@@ -31,8 +31,8 @@ func NewAvro(schemas map[string]string) (*Avro, error) {
 			if err != nil {
 				return nil, errors.Wrap(err, "Avro: Request schema")
 			}
-			defer res.Body.Close()
 			body, err := io.ReadAll(res.Body)
+			_ = res.Body.Close()
 			if err != nil {
 				return nil, errors.Wrap(err, "Avro: read response body")
 			}

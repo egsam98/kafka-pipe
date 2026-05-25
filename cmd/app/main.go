@@ -4,13 +4,14 @@ import (
 	"context"
 	"io"
 	"net/http"
-	_ "net/http/pprof"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"github.com/dgraph-io/badger/v4"
+	"github.com/egsam98/ecto"
 	"github.com/pkg/errors"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -37,21 +38,23 @@ func main() {
 }
 
 type PreConfig struct {
-	// [warden]
-	// required = true
-	Name string `yaml:"name"`
-	// [warden]
-	// required = true
-	Class string `yaml:"class"`
-	// [warden]
-	// dive = true
-	Log struct {
-		Pretty bool `yaml:"pretty"`
-		// [warden]
-		// default = "id:github.com/rs/zerolog.InfoLevel"
-		Level zerolog.Level `yaml:"level"`
-	} `yaml:"log"`
+	Name  string    `yaml:"name"`
+	Class string    `yaml:"class"`
+	Log   LogConfig `yaml:"log"`
 }
+
+type LogConfig struct {
+	Pretty bool          `yaml:"pretty"`
+	Level  zerolog.Level `yaml:"level"`
+}
+
+var preCfgSchema = ecto.Struct[PreConfig](ecto.M{
+	"Name":  ecto.String().Required(),
+	"Class": ecto.String().Required(),
+	"Log": ecto.Struct[LogConfig](ecto.M{
+		"Level": ecto.Atomic[zerolog.Level]().Default(zerolog.InfoLevel),
+	}),
+})
 
 func run() error {
 	if len(os.Args) < 2 {
@@ -62,12 +65,10 @@ func run() error {
 	if err != nil {
 		return errors.Wrap(err, "open config")
 	}
+	raw = []byte(os.ExpandEnv(string(raw)))
 
-	var cfg PreConfig
-	if err := yaml.Unmarshal(raw, &cfg); err != nil {
-		return errors.Wrap(err, "decode config class")
-	}
-	if err := cfg.Validate(); err != nil {
+	cfg, err := preCfgSchema.Cast(raw, yaml.Unmarshal)
+	if err != nil {
 		return err
 	}
 
@@ -124,11 +125,22 @@ func badgerGc(db *badger.DB) {
 }
 
 func httpHealth() {
-	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+	mux := http.NewServeMux() // Attach pprof routes to separate http.ServeMux
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
 		_, _ = io.WriteString(w, "OK")
 	})
-	if err := http.ListenAndServe(HealthAddr, nil); err != nil {
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+	srv := &http.Server{
+		Addr:              HealthAddr,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	if err := srv.ListenAndServe(); err != nil {
 		panic(err)
 	}
 }

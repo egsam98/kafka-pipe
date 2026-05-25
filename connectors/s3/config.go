@@ -4,74 +4,69 @@ import (
 	"time"
 
 	"github.com/dgraph-io/badger/v4"
+	"github.com/egsam98/ecto"
+	ectosl "github.com/egsam98/ecto/slices"
+	ectos "github.com/egsam98/ecto/strings"
 
 	kafkapipe "github.com/egsam98/kafka-pipe"
 )
 
 type SinkConfig struct {
-	// [warden]
-	// required = true
-	Name string `yaml:"name"`
-	// [warden]
-	// dive = true
-	Kafka kafkapipe.ConsumerPoolConfig `yaml:"kafka"`
-	// [warden]
-	// dive = true
-	S3 ConnConfig `yaml:"s3"`
-	// [warden]
-	// default = "1h"
-	GroupTimeInterval time.Duration `yaml:"group_time_interval"`
-	// [warden]
-	// required = true
-	DB *badger.DB `yaml:"-"`
+	Name              string                       `yaml:"name"`
+	Kafka             kafkapipe.ConsumerPoolConfig `yaml:"kafka"`
+	S3                ConnConfig                   `yaml:"s3"`
+	GroupTimeInterval time.Duration                `yaml:"group_time_interval"`
+	DB                *badger.DB                   `yaml:"-"`
 }
+
+var sinkCfgSchema = ecto.Struct[SinkConfig](ecto.M{
+	"Name":              ecto.String().Required(),
+	"Kafka":             kafkapipe.ConsumerPoolCfgSchema,
+	"S3":                connCfgSchema,
+	"GroupTimeInterval": ecto.Atomic[time.Duration]().Default(time.Hour),
+	"DB":                ecto.Atomic[*badger.DB]().Required(),
+})
 
 type ConnConfig struct {
-	SSL bool `yaml:"ssl"`
-	// [warden]
-	// required = true
+	SSL      bool   `yaml:"ssl"`
 	Endpoint string `yaml:"endpoint"`
-	// [warden]
-	// required = true
-	Bucket string `yaml:"bucket"`
-	// [warden]
-	// required = true
-	ID string `yaml:"id"`
-	// [warden]
-	// required = true
-	Secret string `yaml:"secret"`
+	Bucket   string `yaml:"bucket"`
+	ID       string `yaml:"id"`
+	Secret   string `yaml:"secret"`
 }
+
+var connCfgSchema = ecto.Struct[ConnConfig](ecto.M{
+	"Endpoint": ecto.String().Required(),
+	"Bucket":   ecto.String().Required(),
+	"ID":       ecto.String().Required(),
+	"Secret":   ecto.String().Required(),
+})
 
 type BackupConfig struct {
-	// [warden]
-	// required = true
-	Name string `yaml:"name"`
-	// [warden]
-	// dive = true
-	Kafka KafkaConfig `yaml:"kafka"`
-	// dive = true
-	S3 ConnConfig `yaml:"s3"`
-	// [warden]
-	// non-empty = true
-	Topics []string `yaml:"topics"`
-	// [warden]
-	// required = true
-	DateSince time.Time `yaml:"-"`
-	// [warden]
-	// required = true
-	DateTo time.Time `yaml:"-"`
-	// [warden]
-	// required = true
-	DB *badger.DB `yaml:"-"`
+	Name      string      `yaml:"name"`
+	Kafka     KafkaConfig `yaml:"kafka"`
+	S3        ConnConfig  `yaml:"s3"`
+	Topics    []string    `yaml:"topics"`
+	DateSince time.Time   `yaml:"-"`
+	DateTo    time.Time   `yaml:"-"`
+	DB        *badger.DB  `yaml:"-"`
 }
 
+var backupCfgSchema = ecto.Struct[BackupConfig](ecto.M{
+	"Name": ecto.String().Required(),
+	"Kafka": ecto.Struct[KafkaConfig](ecto.M{
+		"Brokers": ecto.Slice[[]string](ecto.String().Test(ectos.URL())).
+			Test(ectosl.Min[[]string](1)),
+		"Batch": kafkapipe.BatchCfgSchema,
+	}),
+	"S3":        connCfgSchema,
+	"Topics":    ecto.Slice[[]string](ecto.String()).Test(ectosl.Min[[]string](1)),
+	"DateSince": ecto.Atomic[time.Time]().Required(),
+	"DateTo":    ecto.Atomic[time.Time]().Required(),
+	"DB":        ecto.Atomic[*badger.DB]().Required(),
+})
+
 type KafkaConfig struct {
-	// [warden]
-	// non-empty = true
-	// [warden.dive]
-	// url = true
-	Brokers []string `yaml:"brokers"`
-	// [warden]
-	// dive = true
-	Batch kafkapipe.BatchConfig `yaml:"batch"`
+	Brokers []string              `yaml:"brokers"`
+	Batch   kafkapipe.BatchConfig `yaml:"batch"`
 }

@@ -35,7 +35,7 @@ func NewSnapshot(cfg SnapshotConfig) *Snapshot {
 }
 
 func (s *Snapshot) Run(ctx context.Context) error {
-	if err := s.cfg.Validate(); err != nil {
+	if err := snapshotCfgSchema.Process(&s.cfg); err != nil {
 		return err
 	}
 

@@ -4,6 +4,9 @@ import (
 	"context"
 
 	"github.com/dgraph-io/badger/v4"
+	"github.com/egsam98/ecto"
+	ectosl "github.com/egsam98/ecto/slices"
+	ectos "github.com/egsam98/ecto/strings"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"gopkg.in/yaml.v3"
 
@@ -11,24 +14,22 @@ import (
 )
 
 type SinkConfig struct {
-	// [warden]
-	// required = true
-	Name string `yaml:"name"`
-	// [warden]
-	// dive = true
-	Kafka kafkapipe.ConsumerPoolConfig `yaml:"kafka"`
-	// [warden]
-	// dive = true
-	ClickHouse ClickHouseConfig `yaml:"click_house"`
-	// [warden]
-	// required = true
-	Serde kafkapipe.Serde `yaml:"-"`
-	// [warden]
-	// required = true
-	DB           *badger.DB        `yaml:"-"`
-	Routes       map[string]string `yaml:"routes"`
-	BeforeInsert BeforeInsert      `yaml:"-"`
+	Name         string                       `yaml:"name"`
+	Kafka        kafkapipe.ConsumerPoolConfig `yaml:"kafka"`
+	ClickHouse   ClickHouseConfig             `yaml:"click_house"`
+	Serde        kafkapipe.Serde              `yaml:"-"`
+	DB           *badger.DB                   `yaml:"-"`
+	Routes       map[string]string            `yaml:"routes"`
+	BeforeInsert BeforeInsert                 `yaml:"-"`
 }
+
+var sinkCfgSchema = ecto.Struct[SinkConfig](ecto.M{
+	"Name":       ecto.String().Required(),
+	"Kafka":      kafkapipe.ConsumerPoolCfgSchema,
+	"ClickHouse": clickHouseCfgSchema,
+	"Serde":      ecto.Atomic[kafkapipe.Serde]().Required(),
+	"DB":         ecto.Atomic[*badger.DB]().Required(),
+})
 
 func (c *SinkConfig) UnmarshalYAML(node *yaml.Node) error {
 	type inline SinkConfig // Avoid stack overflow
@@ -49,16 +50,16 @@ func (c *SinkConfig) UnmarshalYAML(node *yaml.Node) error {
 type BeforeInsert func(ctx context.Context, serde kafkapipe.Serde, topic string, batch []*kgo.Record) ([]any, error)
 
 type ClickHouseConfig struct {
-	// [warden]
-	// required = true
-	Database string `yaml:"database"`
-	// [warden]
-	// required = true
-	User     string `yaml:"user"`
-	Password string `yaml:"password"`
-	// [warden]
-	// non-empty = true
-	// [warden.dive]
-	// url = true
-	Addrs []string `yaml:"addrs"`
+	Database string   `yaml:"database"`
+	User     string   `yaml:"user"`
+	Password string   `yaml:"password"`
+	Addrs    []string `yaml:"addrs"`
 }
+
+var clickHouseCfgSchema = ecto.Struct[ClickHouseConfig](ecto.M{
+	"Database": ecto.String().Required(),
+	"User":     ecto.String().Required(),
+	"Addrs": ecto.Slice[[]string](
+		ecto.String().Test(ectos.URL()),
+	).Test(ectosl.Min[[]string](1)),
+})

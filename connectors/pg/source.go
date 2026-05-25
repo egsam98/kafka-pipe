@@ -70,7 +70,7 @@ func NewSource(cfg SourceConfig) *Source {
 }
 
 func (s *Source) Run(ctx context.Context) error {
-	if err := s.cfg.Validate(); err != nil {
+	if err := sourceCfgSchema.Process(&s.cfg); err != nil {
 		return err
 	}
 	// Add replication=database query param

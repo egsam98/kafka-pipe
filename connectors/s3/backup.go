@@ -44,7 +44,7 @@ func NewBackup(cfg BackupConfig) (*Backup, error) {
 }
 
 func (b *Backup) Run(ctx context.Context) error {
-	if err := b.cfg.Validate(); err != nil {
+	if err := backupCfgSchema.Process(&b.cfg); err != nil {
 		return err
 	}
 
@@ -86,7 +86,7 @@ func (b *Backup) Run(ctx context.Context) error {
 	if err := b.cfg.DB.View(func(tx *badger.Txn) error {
 		item, err := tx.Get(b.dbOffsetsKey)
 		if err != nil {
-			if err == badger.ErrKeyNotFound {
+			if errors.Is(err, badger.ErrKeyNotFound) {
 				return nil
 			}
 			return err

@@ -35,7 +35,7 @@ func NewSink(cfg SinkConfig) *Sink {
 }
 
 func (s *Sink) Run(ctx context.Context) error {
-	if err := s.cfg.Validate(); err != nil {
+	if err := sinkCfgSchema.Process(&s.cfg); err != nil {
 		return err
 	}
 
