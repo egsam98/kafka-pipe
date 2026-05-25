@@ -37,13 +37,14 @@ To start application you want to pass YAML configuration as an argument for appl
 ```sh
 ./{kafka-pipe bin} config.yaml
 ```
+Note that environment variables are also supported in YAML config via `$NAME`/`${NAME}` syntax.
 Common parameters of config:
 ```yaml
 name: "name of your connector"
 class: "any class described in \"Supported classes\" section"
 log:
   pretty: true
-  level: "info"
+  level: $LOG_LEVEL
 ```
 Additional params are particular for every class.
 
