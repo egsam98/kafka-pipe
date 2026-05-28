@@ -8,7 +8,6 @@ import (
 	"code.cloudfoundry.org/bytefmt"
 	"github.com/egsam98/ecto"
 	ectosl "github.com/egsam98/ecto/slices"
-	ectos "github.com/egsam98/ecto/strings"
 	"github.com/pkg/errors"
 	"github.com/twmb/franz-go/pkg/sasl"
 	"github.com/twmb/franz-go/pkg/sasl/aws"
@@ -43,7 +42,7 @@ type TopicConfig struct {
 
 var ProducerCfgSchema = ecto.Struct[ProducerConfig](ecto.M{
 	"Brokers": ecto.Slice[[]string](
-		ecto.String().Test(ectos.URL()),
+		ecto.String().Required(),
 	).Test(ectosl.Min[[]string](1)),
 	"Topic": ecto.Struct[TopicConfig](ecto.M{
 		"ReplicationFactor": ecto.Atomic[uint16]().Default(1),
@@ -89,7 +88,7 @@ type BatchConfig struct {
 var ConsumerPoolCfgSchema = ecto.Struct[ConsumerPoolConfig](ecto.M{
 	"Group": ecto.String().Required(),
 	"Brokers": ecto.Slice[[]string](
-		ecto.String().Test(ectos.URL()),
+		ecto.String().Required(),
 	).Test(ectosl.Min[[]string](1)),
 	"Topics":           ecto.Slice[[]string](ecto.String()).Test(ectosl.Min[[]string](1)),
 	"RebalanceTimeout": ecto.Atomic[time.Duration]().Default(time.Minute),

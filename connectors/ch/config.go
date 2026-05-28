@@ -6,7 +6,6 @@ import (
 	"github.com/dgraph-io/badger/v4"
 	"github.com/egsam98/ecto"
 	ectosl "github.com/egsam98/ecto/slices"
-	ectos "github.com/egsam98/ecto/strings"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"gopkg.in/yaml.v3"
 
@@ -60,6 +59,6 @@ var clickHouseCfgSchema = ecto.Struct[ClickHouseConfig](ecto.M{
 	"Database": ecto.String().Required(),
 	"User":     ecto.String().Required(),
 	"Addrs": ecto.Slice[[]string](
-		ecto.String().Test(ectos.URL()),
+		ecto.String().Required(),
 	).Test(ectosl.Min[[]string](1)),
 })

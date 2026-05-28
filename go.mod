@@ -7,7 +7,7 @@ require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.26.0
 	github.com/cheggaaa/pb/v3 v3.1.5
 	github.com/dgraph-io/badger/v4 v4.1.0
-	github.com/egsam98/ecto v0.0.0-20260505215047-f5e5a466d5b1
+	github.com/egsam98/ecto v0.0.0-20260528121300-31c98c832ec2
 	github.com/hamba/avro/v2 v2.22.1
 	github.com/jackc/pglogrepl v0.0.0-20230428004623-0c5b98f52784
 	github.com/jackc/pgx/v5 v5.3.1

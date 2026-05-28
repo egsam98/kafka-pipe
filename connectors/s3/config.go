@@ -6,7 +6,6 @@ import (
 	"github.com/dgraph-io/badger/v4"
 	"github.com/egsam98/ecto"
 	ectosl "github.com/egsam98/ecto/slices"
-	ectos "github.com/egsam98/ecto/strings"
 
 	kafkapipe "github.com/egsam98/kafka-pipe"
 )
@@ -55,7 +54,7 @@ type BackupConfig struct {
 var backupCfgSchema = ecto.Struct[BackupConfig](ecto.M{
 	"Name": ecto.String().Required(),
 	"Kafka": ecto.Struct[KafkaConfig](ecto.M{
-		"Brokers": ecto.Slice[[]string](ecto.String().Test(ectos.URL())).
+		"Brokers": ecto.Slice[[]string](ecto.String().Required()).
 			Test(ectosl.Min[[]string](1)),
 		"Batch": kafkapipe.BatchCfgSchema,
 	}),
