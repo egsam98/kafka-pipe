@@ -27,14 +27,12 @@ type TimeFormat string
 
 func (t *TimeFormat) UnmarshalText(text []byte) error {
 	switch val := TimeFormat(text); val {
-	case "":
-		*t = TimestampMilli
 	case RFC3339, TimestampMilli, Timestamp:
 		*t = val
+		return nil
 	default:
 		return errors.Errorf("invalid time_format: %s", text)
 	}
-	return nil
 }
 
 const (
@@ -57,6 +55,9 @@ func newJSONFromYAML(value yaml.Node) (*JSON, error) {
 	}
 	if err := value.Decode(&cfg); err != nil {
 		return nil, errors.Wrapf(err, "decode yaml %q into %T", value.Value, cfg)
+	}
+	if cfg.TimeFormat == "" {
+		cfg.TimeFormat = TimestampMilli
 	}
 	return NewJSON(cfg.TimeFormat), nil
 }

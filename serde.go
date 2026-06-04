@@ -21,9 +21,7 @@ func NewSerdeFromYAML(value yaml.Node) (Serde, error) {
 	var serde Serde
 	var err error
 	switch format.Value {
-	case "":
-		fallthrough
-	case "json":
+	case "", "json":
 		serde, err = newJSONFromYAML(value)
 	case "avro":
 		serde, err = newAvroFromYAML(value)
